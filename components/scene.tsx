@@ -202,41 +202,231 @@ function paintCssField(context: CanvasRenderingContext2D, css: string, width: nu
   }
 }
 
-function cssBackgroundTexture(css: string) {
-  const width = 256;
-  const height = 144;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
+const FIELD_WIDTH = 256;
+const FIELD_HEIGHT = 144;
+const BACKDROP_FADE_MS = 500;
+
+const SRGB_TO_LINEAR = new Float32Array(256);
+for (let index = 0; index < 256; index += 1) {
+  const encoded = index / 255;
+  SRGB_TO_LINEAR[index] =
+    encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgbByte(linear: number) {
+  const clamped = linear < 0 ? 0 : linear > 1 ? 1 : linear;
+  const encoded = clamped <= 0.0031308 ? clamped * 12.92 : 1.055 * clamped ** (1 / 2.4) - 0.055;
+  return Math.round(encoded * 255);
+}
+
+function makeFieldTexture(canvas: HTMLCanvasElement, solid = false) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  if (solid) texture.userData.solid = true;
+  return texture;
+}
+
+const solidTextures = new Map<string, THREE.Texture>();
+
+function solidTexture(hex: string) {
+  const cached = solidTextures.get(hex);
+  if (cached) return cached;
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 4;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.fillStyle = hex;
+    context.fillRect(0, 0, 4, 4);
+  }
+  const texture = makeFieldTexture(canvas, true);
+  solidTextures.set(hex, texture);
+  return texture;
+}
+
+function cssBackgroundTexture(css: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = FIELD_WIDTH;
+  canvas.height = FIELD_HEIGHT;
+  const context = canvas.getContext("2d");
+  const texture = makeFieldTexture(canvas);
   if (!context) return texture;
-  paintCssField(context, css, width, height);
+  paintCssField(context, css, FIELD_WIDTH, FIELD_HEIGHT);
   texture.needsUpdate = true;
   return texture;
 }
 
+function holdTexture(texture: THREE.Texture) {
+  const data = texture.userData as { holds?: number; solid?: boolean };
+  if (data.solid) return;
+  data.holds = (data.holds ?? 0) + 1;
+}
+
+function dropTexture(texture: THREE.Texture | null) {
+  if (!texture) return;
+  const data = texture.userData as { holds?: number; solid?: boolean; gone?: boolean };
+  const holds = data.holds ?? 0;
+  if (data.solid || data.gone || holds <= 0) return;
+  data.holds = holds - 1;
+  if (data.holds > 0) return;
+  data.gone = true;
+  texture.dispose();
+}
+
+function syncHolds(
+  prevFrom: THREE.Texture | null,
+  prevTo: THREE.Texture | null,
+  nextFrom: THREE.Texture,
+  nextTo: THREE.Texture,
+) {
+  const previous = new Set<THREE.Texture>();
+  if (prevFrom) previous.add(prevFrom);
+  if (prevTo) previous.add(prevTo);
+  const next = new Set<THREE.Texture>([nextFrom, nextTo]);
+  for (const texture of next) {
+    if (!previous.has(texture)) holdTexture(texture);
+  }
+  for (const texture of previous) {
+    if (!next.has(texture)) dropTexture(texture);
+  }
+}
+
+function textureSource(texture: THREE.Texture) {
+  const image = texture.image as CanvasImageSource | undefined;
+  if (!image) return null;
+  if (image instanceof HTMLCanvasElement) return image.width > 0 ? image : null;
+  if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement) {
+    return image.naturalWidth > 0 ? image : null;
+  }
+  if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
+    return image.width > 0 ? image : null;
+  }
+  return null;
+}
+
+function snapshotBlend(from: THREE.Texture, to: THREE.Texture, amount: number) {
+  const fromSource = textureSource(from);
+  const toSource = textureSource(to);
+  if (!fromSource || !toSource) return null;
+  const scratch = document.createElement("canvas");
+  scratch.width = FIELD_WIDTH;
+  scratch.height = FIELD_HEIGHT;
+  const scratchContext = scratch.getContext("2d", { willReadFrequently: true });
+  if (!scratchContext) return null;
+  const read = (source: CanvasImageSource) => {
+    scratchContext.clearRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
+    scratchContext.drawImage(source, 0, 0, FIELD_WIDTH, FIELD_HEIGHT);
+    return scratchContext.getImageData(0, 0, FIELD_WIDTH, FIELD_HEIGHT).data;
+  };
+  const before = read(fromSource);
+  const after = read(toSource);
+  const canvas = document.createElement("canvas");
+  canvas.width = FIELD_WIDTH;
+  canvas.height = FIELD_HEIGHT;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const image = context.createImageData(FIELD_WIDTH, FIELD_HEIGHT);
+  const output = image.data;
+  const keep = 1 - amount;
+  for (let index = 0; index < output.length; index += 4) {
+    output[index] = linearToSrgbByte(SRGB_TO_LINEAR[before[index]] * keep + SRGB_TO_LINEAR[after[index]] * amount);
+    output[index + 1] = linearToSrgbByte(
+      SRGB_TO_LINEAR[before[index + 1]] * keep + SRGB_TO_LINEAR[after[index + 1]] * amount,
+    );
+    output[index + 2] = linearToSrgbByte(
+      SRGB_TO_LINEAR[before[index + 2]] * keep + SRGB_TO_LINEAR[after[index + 2]] * amount,
+    );
+    output[index + 3] = Math.round(before[index + 3] * keep + after[index + 3] * amount);
+  }
+  context.putImageData(image, 0, 0);
+  return makeFieldTexture(canvas);
+}
+
+const BACKDROP_VERTEX = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 1.0, 1.0);
+}
+`;
+
+const BACKDROP_FRAGMENT = /* glsl */ `
+uniform sampler2D uFrom;
+uniform sampler2D uTo;
+uniform float uMix;
+varying vec2 vUv;
+void main() {
+  vec4 fromColor = texture2D(uFrom, vUv);
+  vec4 toColor = texture2D(uTo, vUv);
+  gl_FragColor = mix(fromColor, toColor, uMix);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`;
+
+function createBackdropMaterial(initial: THREE.Texture) {
+  return new THREE.ShaderMaterial({
+    name: "stage-backdrop",
+    uniforms: {
+      uFrom: { value: initial },
+      uTo: { value: initial },
+      uMix: { value: 1 },
+    },
+    vertexShader: BACKDROP_VERTEX,
+    fragmentShader: BACKDROP_FRAGMENT,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+  });
+}
+
 function useUploadedBackground(image: string | null) {
   const [photo, setPhoto] = useState<{ url: string; texture: THREE.Texture } | null>(null);
+  const photoRef = useRef(photo);
+  const hookHeld = useRef<THREE.Texture | null>(null);
+
+  function hookHold(texture: THREE.Texture | null) {
+    if (hookHeld.current === texture) return;
+    dropTexture(hookHeld.current);
+    hookHeld.current = texture;
+    if (texture) holdTexture(texture);
+  }
 
   useEffect(() => {
-    if (!image) return;
+    const current = photoRef.current;
+    if (!image) {
+      hookHold(null);
+      return;
+    }
+    if (current?.url === image) return;
     let alive = true;
     const loader = new THREE.TextureLoader();
-    const loaded = loader.load(image, (next) => {
+    loader.load(image, (next) => {
       next.colorSpace = THREE.SRGBColorSpace;
+      next.magFilter = THREE.LinearFilter;
+      next.minFilter = THREE.LinearFilter;
+      next.generateMipmaps = false;
       next.needsUpdate = true;
-      if (alive) setPhoto({ url: image, texture: next });
+      if (!alive) {
+        next.dispose();
+        return;
+      }
+      const record = { url: image, texture: next };
+      photoRef.current = record;
+      hookHold(next);
+      setPhoto(record);
     });
     return () => {
       alive = false;
-      loaded.dispose();
     };
   }, [image]);
+
+  useEffect(() => () => hookHold(null), []);
 
   if (!image || photo?.url !== image) return null;
   return photo.texture;
@@ -253,15 +443,104 @@ function SceneBackground({
   const painted = !image && spec.color === null ? spec.css : null;
   const cssTexture = useMemo(() => (painted ? cssBackgroundTexture(painted) : null), [painted]);
   const photo = useUploadedBackground(image);
+  const target = image ? photo : (cssTexture ?? solidTexture(spec.color ?? "#ffffff"));
+  const invalidate = useThree((state) => state.invalidate);
+  const scene = useThree((state) => state.scene);
+  const geometry = useMemo(() => new THREE.PlaneGeometry(2, 2), []);
+  const material = useMemo(() => createBackdropMaterial(solidTexture("#ffffff")), []);
+  const fromTex = useRef<THREE.Texture | null>(null);
+  const toTex = useRef<THREE.Texture | null>(null);
+  const mix = useRef(1);
+  const fading = useRef(false);
+  const started = useRef(0);
 
-  useEffect(() => () => cssTexture?.dispose(), [cssTexture]);
+  useLayoutEffect(() => {
+    scene.background = null;
+  }, [scene]);
 
-  const texture = image ? photo : cssTexture;
-  if (texture) {
-    return <primitive attach="background" object={texture} />;
-  }
+  useLayoutEffect(() => {
+    if (!target) return;
+    const previousFrom = fromTex.current;
+    const previousTo = toTex.current;
+    const amount = mix.current;
+    if (previousTo === target && amount >= 0.999) return;
 
-  return <color attach="background" args={[spec.color ?? "#ffffff"]} />;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let departing = previousTo;
+    if (previousFrom && previousTo && previousFrom !== previousTo && amount <= 0.001) {
+      departing = previousFrom;
+    } else if (
+      !reduced &&
+      previousFrom &&
+      previousTo &&
+      previousFrom !== previousTo &&
+      amount < 0.999
+    ) {
+      departing = snapshotBlend(previousFrom, previousTo, amount) ?? previousTo;
+    }
+    if (!departing || reduced) departing = target;
+
+    syncHolds(previousFrom, previousTo, departing, target);
+    fromTex.current = departing;
+    toTex.current = target;
+    if (reduced || departing === target || !previousTo) {
+      mix.current = 1;
+      fading.current = false;
+    } else {
+      mix.current = 0;
+      fading.current = true;
+      started.current = performance.now();
+    }
+    material.uniforms.uFrom.value = departing;
+    material.uniforms.uTo.value = target;
+    material.uniforms.uMix.value = mix.current;
+    invalidate();
+  }, [invalidate, material, target]);
+
+  useFrame(() => {
+    if (!fading.current) return;
+    const t = Math.min(1, (performance.now() - started.current) / BACKDROP_FADE_MS);
+    const eased = 1 - (1 - t) ** 3;
+    mix.current = eased;
+    material.uniforms.uMix.value = eased;
+    if (t < 1) {
+      invalidate();
+      return;
+    }
+    fading.current = false;
+    const from = fromTex.current;
+    const to = toTex.current;
+    if (from && to && from !== to) {
+      syncHolds(from, to, to, to);
+      fromTex.current = to;
+      material.uniforms.uFrom.value = to;
+    }
+  });
+
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      material.dispose();
+      const from = fromTex.current;
+      const to = toTex.current;
+      fromTex.current = null;
+      toTex.current = null;
+      dropTexture(from);
+      if (to !== from) dropTexture(to);
+    },
+    [geometry, material],
+  );
+
+  return (
+    <mesh
+      name="stage-backdrop"
+      geometry={geometry}
+      material={material}
+      frustumCulled={false}
+      renderOrder={-1000}
+      raycast={() => {}}
+    />
+  );
 }
 
 function downloadPng(href: string, name: string) {
@@ -351,8 +630,11 @@ function ExportBridge({
       const clear = new THREE.Color();
       gl.getClearColor(clear);
       const clearAlpha = gl.getClearAlpha();
+      const backdrop = scene.getObjectByName("stage-backdrop");
+      const backdropVisible = backdrop?.visible ?? true;
       if (mode === "transparent") {
         scene.background = null;
+        if (backdrop) backdrop.visible = false;
         gl.setClearColor(0x000000, 0);
       }
       gl.render(scene, camera);
@@ -364,6 +646,7 @@ function ExportBridge({
       }
       if (mode === "transparent") {
         scene.background = previous;
+        if (backdrop) backdrop.visible = backdropVisible;
         gl.setClearColor(clear, clearAlpha);
         gl.render(scene, camera);
       }
