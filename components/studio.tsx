@@ -155,6 +155,12 @@ export function Studio() {
   const [cinematic, setCinematic] = useState<CinematicShot | null>(null);
   const cinematicToken = useRef(0);
   const [apertura, setApertura] = useState(0);
+  const [duoOpen, setDuoOpen] = useState(false);
+  const aperturaRef = useRef(0);
+  const foldRef = useRef(0);
+  const deviceIdRef = useRef<DeviceId>("iphone-14");
+  aperturaRef.current = apertura;
+  deviceIdRef.current = deviceId;
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [screen, setScreen] = useState<ScreenState>({
     status: "loading",
@@ -185,6 +191,29 @@ export function Studio() {
   }
   const handheld = device.kind === "phone" || device.kind === "tablet" || device.kind === "duo";
 
+  function foldDuo(open: boolean) {
+    setDuoOpen(open);
+    const target = open ? 1 : 0;
+    cancelAnimationFrame(foldRef.current);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      aperturaRef.current = target;
+      setApertura(target);
+      return;
+    }
+    const from = aperturaRef.current;
+    const start = performance.now();
+    const tick = (now: number) => {
+      if (deviceIdRef.current !== "iphone-duo") return;
+      const t = Math.min(1, (now - start) / 500);
+      const eased = 1 - (1 - t) ** 3;
+      const next = from + (target - from) * eased;
+      aperturaRef.current = next;
+      setApertura(next);
+      if (t < 1) foldRef.current = requestAnimationFrame(tick);
+    };
+    foldRef.current = requestAnimationFrame(tick);
+  }
+
   function rememberFrame(next: ImageBitmap | null) {
     setFrame((current) => {
       if (current && current !== next) {
@@ -202,6 +231,8 @@ export function Studio() {
     sentSize.current = "";
     socket?.close();
   }
+
+  useEffect(() => () => cancelAnimationFrame(foldRef.current), []);
 
   useEffect(() => {
     const syncStream = () => {
@@ -385,7 +416,13 @@ export function Studio() {
                 if (!value || !isDeviceId(value)) return;
                 const next = deviceById(value);
                 if (next.kind === "laptop" && device.kind !== "laptop") setApertura(1);
-                if (next.id === "iphone-duo" && device.id !== "iphone-duo") setApertura(0);
+                if (device.id === "iphone-duo" && next.id !== "iphone-duo") cancelAnimationFrame(foldRef.current);
+                if (next.id === "iphone-duo" && device.id !== "iphone-duo") {
+                  cancelAnimationFrame(foldRef.current);
+                  setDuoOpen(false);
+                  aperturaRef.current = 0;
+                  setApertura(0);
+                }
                 setDeviceId(value);
               }}
             >
@@ -614,23 +651,32 @@ export function Studio() {
                 />
               </label>
               {deviceId === "iphone-duo" ? (
-                <label className="flex flex-col gap-2">
-                  <span className="flex items-center justify-between text-[13px]">
-                    <span className="text-neutral-500">Opening</span>
-                    <span className="tabular-nums">{apertura.toFixed(1)}</span>
-                  </span>
-                  <Slider
-                    value={[apertura]}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onValueChange={(value) => {
-                      const next = Array.isArray(value) ? value[0] : value;
-                      setApertura(next);
-                    }}
-                    aria-label="Opening"
+                <div className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5" role="group" aria-label="Duo">
+                  <span
+                    aria-hidden
+                    className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
+                      duoOpen ? "translate-x-full" : "translate-x-0"
+                    }`}
                   />
-                </label>
+                  {(
+                    [
+                      [false, "Close"],
+                      [true, "Open"],
+                    ] as const
+                  ).map(([open, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={duoOpen === open}
+                      onClick={() => foldDuo(open)}
+                      className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                        duoOpen === open ? "text-white" : "text-neutral-950"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               ) : null}
               {device.kind === "laptop" ? (
                 <label className="flex flex-col gap-2">
