@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
+import { ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,7 @@ export function Studio() {
   const [url, setUrl] = useState(DEFAULT_URL);
   const [deviceId, setDeviceId] = useState<DeviceId>("iphone-14");
   const [background, setBackground] = useState<BackgroundId>("blanco");
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [customBg, setCustomBg] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
   const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
@@ -360,6 +362,7 @@ export function Studio() {
                     const next = URL.createObjectURL(file);
                     setCustomBg(next);
                     setUseCustom(true);
+                    setOpenGroup(null);
                   }}
                 />
                 <Button
@@ -382,6 +385,7 @@ export function Studio() {
                         aria-label={item.label}
                         onClick={() => {
                           setUseCustom(false);
+                          setOpenGroup(null);
                           setBackground(item.id);
                         }}
                         className={`size-6 shrink-0 rounded-full border border-black/15 ${
@@ -392,33 +396,47 @@ export function Studio() {
                     );
                   })}
                 </div>
-                {GRADIENT_GROUPS.map((group) => (
-                  <div key={group.label} className="flex flex-col gap-1.5">
-                    <span className="text-[12px] text-neutral-500">{group.label}</span>
-                    <div className="flex flex-wrap gap-1.5 p-0.5" role="listbox" aria-label={group.label}>
-                      {group.items.map((item) => {
-                        const selected = !useCustom && background === item.id;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            aria-label={group.label}
-                            onClick={() => {
-                              setUseCustom(false);
-                              setBackground(item.id);
-                            }}
-                            className={`size-5 shrink-0 rounded-full border border-black/10 ${
-                              selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
-                            }`}
-                            style={{ background: item.css }}
-                          />
-                        );
-                      })}
+                {GRADIENT_GROUPS.map((group) => {
+                  const open = openGroup === group.label;
+                  return (
+                    <div key={group.label} className="flex flex-col gap-1.5">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        className="flex w-full items-center justify-between text-left text-[12px] text-neutral-500"
+                        onClick={() => setOpenGroup(open ? null : group.label)}
+                      >
+                        {group.label}
+                        <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+                      </button>
+                      {open ? (
+                        <div className="flex flex-wrap gap-1.5 p-0.5" role="listbox" aria-label={group.label}>
+                          {group.items.map((item) => {
+                            const selected = !useCustom && background === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                aria-label={group.label}
+                                onClick={() => {
+                                  setUseCustom(false);
+                                  setOpenGroup(group.label);
+                                  setBackground(item.id);
+                                }}
+                                className={`size-5 shrink-0 rounded-full border border-black/10 ${
+                                  selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
+                                }`}
+                                style={{ background: item.css }}
+                              />
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               {handheld ? (
                 <div className="flex flex-col gap-2">

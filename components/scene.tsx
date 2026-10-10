@@ -128,9 +128,79 @@ function useDeviceTexture(
   return { texture, leftTexture, rightTexture };
 }
 
+function splitTopLevel(value: string) {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === "," && depth === 0) {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  const last = value.slice(start).trim();
+  if (last) parts.push(last);
+  return parts;
+}
+
+function parseStop(value: string) {
+  const match = value.trim().match(/^(.*)\s+([\d.]+)%$/);
+  if (!match) return { color: value.trim(), offset: 0 };
+  return { color: match[1].trim(), offset: Number(match[2]) / 100 };
+}
+
+function paintCssField(context: CanvasRenderingContext2D, css: string, width: number, height: number) {
+  const layers = splitTopLevel(css);
+  for (let index = layers.length - 1; index >= 0; index -= 1) {
+    const layer = layers[index];
+    const open = layer.indexOf("(");
+    const close = layer.lastIndexOf(")");
+    if (open < 0 || close < 0) continue;
+    const kind = layer.slice(0, open);
+    const args = splitTopLevel(layer.slice(open + 1, close));
+    if (kind === "linear-gradient") {
+      const angle = (Number.parseFloat(args[0]) * Math.PI) / 180;
+      const dx = Math.sin(angle);
+      const dy = -Math.cos(angle);
+      const half = Math.abs((width / 2) * dx) + Math.abs((height / 2) * dy);
+      const gradient = context.createLinearGradient(
+        width / 2 - dx * half,
+        height / 2 - dy * half,
+        width / 2 + dx * half,
+        height / 2 + dy * half,
+      );
+      for (const stop of args.slice(1).map(parseStop)) gradient.addColorStop(stop.offset, stop.color);
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, width, height);
+      continue;
+    }
+    if (kind !== "radial-gradient") continue;
+    const head = args[0]?.match(/([\d.]+)%\s+([\d.]+)%\s+at\s+([\d.]+)%\s+([\d.]+)%/);
+    if (!head) continue;
+    const rx = (Number(head[1]) / 100) * width;
+    const ry = (Number(head[2]) / 100) * height;
+    const cx = (Number(head[3]) / 100) * width;
+    const cy = (Number(head[4]) / 100) * height;
+    if (rx < 0.5 || ry < 0.5) continue;
+    context.save();
+    context.translate(cx, cy);
+    context.scale(rx, ry);
+    const gradient = context.createRadialGradient(0, 0, 0, 0, 0, 1);
+    for (const stop of args.slice(1).map(parseStop)) {
+      gradient.addColorStop(Math.min(1, Math.max(0, stop.offset)), stop.color);
+    }
+    context.fillStyle = gradient;
+    context.fillRect(-cx / rx, -cy / ry, width / rx, height / ry);
+    context.restore();
+  }
+}
+
 function cssBackgroundTexture(css: string) {
-  const width = 1280;
-  const height = 720;
+  const width = 256;
+  const height = 144;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -141,14 +211,8 @@ function cssBackgroundTexture(css: string) {
   texture.minFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
   if (!context) return texture;
-  const safe = css.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;background:${safe}"></div></foreignObject></svg>`;
-  const image = new Image();
-  image.onload = () => {
-    context.drawImage(image, 0, 0, width, height);
-    texture.needsUpdate = true;
-  };
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  paintCssField(context, css, width, height);
+  texture.needsUpdate = true;
   return texture;
 }
 
