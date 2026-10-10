@@ -41,6 +41,8 @@ const EMPTY_SCREEN: ScreenState = {
 
 const DEFAULT_URL = "https://www.apple.com";
 
+const QUIET = "duration-200 ease-out motion-reduce:transition-none";
+
 function ToggleRow({
   label,
   checked,
@@ -59,11 +61,55 @@ function ToggleRow({
         aria-checked={checked}
         aria-label={label}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 shrink-0 rounded-full ${checked ? "bg-neutral-950" : "bg-neutral-200"}`}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${QUIET} ${
+          checked ? "bg-neutral-950" : "bg-neutral-200"
+        }`}
       >
-        <span className={`absolute top-0.5 size-4 rounded-full bg-white ${checked ? "left-4" : "left-0.5"}`} />
+        <span
+          className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${QUIET} ${
+            checked ? "translate-x-3.5" : "translate-x-0"
+          }`}
+        />
       </button>
     </div>
+  );
+}
+
+function ColorSwatch({
+  selected,
+  label,
+  background,
+  size = "md",
+  onClick,
+}: {
+  selected: boolean;
+  label: string;
+  background: string;
+  size?: "sm" | "md";
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      aria-label={label}
+      onClick={onClick}
+      className={`relative shrink-0 rounded-full outline-none ${size === "sm" ? "size-5" : "size-6"}`}
+    >
+      <span
+        className={`absolute inset-0 rounded-full border border-black/15 transition-transform ${QUIET} ${
+          selected ? "scale-[1.04]" : "scale-100"
+        }`}
+        style={{ background }}
+      />
+      <span
+        aria-hidden
+        className={`pointer-events-none absolute -inset-1 rounded-full border-2 border-neutral-950 transition-[opacity,scale] ${QUIET} ${
+          selected ? "scale-100 opacity-100" : "scale-95 opacity-0"
+        }`}
+      />
+    </button>
   );
 }
 
@@ -357,24 +403,16 @@ export function Studio() {
                 <span className="text-[13px] text-neutral-500">
                   Finish <span className="text-neutral-950">· {finish.label}</span>
                 </span>
-                <div className="flex flex-wrap gap-2 p-0.5" role="listbox" aria-label="Finish">
-                  {device.finishes.map((item) => {
-                    const selected = item.id === finish.id;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        aria-label={item.label}
-                        onClick={() => setFinishId(item.id)}
-                        className={`size-6 shrink-0 rounded-full border border-black/15 ${
-                          selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
-                        }`}
-                        style={{ backgroundColor: item.color }}
-                      />
-                    );
-                  })}
+                <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Finish">
+                  {device.finishes.map((item) => (
+                    <ColorSwatch
+                      key={item.id}
+                      selected={item.id === finish.id}
+                      label={item.label}
+                      background={item.color}
+                      onClick={() => setFinishId(item.id)}
+                    />
+                  ))}
                 </div>
               </div>
               <div className="flex flex-col gap-2.5">
@@ -403,33 +441,25 @@ export function Studio() {
                 >
                   Upload image
                 </Button>
-                <div className="flex flex-wrap gap-2 p-0.5" role="listbox" aria-label="Solid backgrounds">
-                  {SOLID_BACKGROUNDS.map((item) => {
-                    const selected = !useCustom && background === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        aria-label={item.label}
-                        onClick={() => {
-                          setUseCustom(false);
-                          setOpenGroup(null);
-                          setBackground(item.id);
-                        }}
-                        className={`size-6 shrink-0 rounded-full border border-black/15 ${
-                          selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
-                        }`}
-                        style={{ background: item.css }}
-                      />
-                    );
-                  })}
+                <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Solid backgrounds">
+                  {SOLID_BACKGROUNDS.map((item) => (
+                    <ColorSwatch
+                      key={item.id}
+                      selected={!useCustom && background === item.id}
+                      label={item.label}
+                      background={item.css}
+                      onClick={() => {
+                        setUseCustom(false);
+                        setOpenGroup(null);
+                        setBackground(item.id);
+                      }}
+                    />
+                  ))}
                 </div>
                 {GRADIENT_GROUPS.map((group) => {
                   const open = openGroup === group.label;
                   return (
-                    <div key={group.label} className="flex flex-col gap-1.5">
+                    <div key={group.label}>
                       <button
                         type="button"
                         aria-expanded={open}
@@ -437,33 +467,34 @@ export function Studio() {
                         onClick={() => setOpenGroup(open ? null : group.label)}
                       >
                         {group.label}
-                        <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+                        <ChevronDown
+                          className={`size-3.5 transition-transform ${QUIET} ${open ? "rotate-180" : ""}`}
+                        />
                       </button>
-                      {open ? (
-                        <div className="flex flex-wrap gap-1.5 p-0.5" role="listbox" aria-label={group.label}>
-                          {group.items.map((item) => {
-                            const selected = !useCustom && background === item.id;
-                            return (
-                              <button
+                      <div
+                        className={`grid transition-[grid-template-rows,opacity] ${QUIET} ${
+                          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                        }`}
+                      >
+                        <div className="overflow-hidden" inert={open ? undefined : true}>
+                          <div className="flex flex-wrap gap-1.5 p-1 pt-1.5" role="listbox" aria-label={group.label}>
+                            {group.items.map((item) => (
+                              <ColorSwatch
                                 key={item.id}
-                                type="button"
-                                role="option"
-                                aria-selected={selected}
-                                aria-label={group.label}
+                                size="sm"
+                                selected={!useCustom && background === item.id}
+                                label={group.label}
+                                background={item.css}
                                 onClick={() => {
                                   setUseCustom(false);
                                   setOpenGroup(group.label);
                                   setBackground(item.id);
                                 }}
-                                className={`size-5 shrink-0 rounded-full border border-black/10 ${
-                                  selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
-                                }`}
-                                style={{ background: item.css }}
                               />
-                            );
-                          })}
+                            ))}
+                          </div>
                         </div>
-                      ) : null}
+                      </div>
                     </div>
                   );
                 })}
@@ -473,23 +504,31 @@ export function Studio() {
               {handheld ? (
                 <div className="flex flex-col gap-2">
                   <span className="text-[13px] text-neutral-500">Orientation</span>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      type="button"
-                      variant={orientation === "portrait" ? "default" : "outline"}
-                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
-                      onClick={() => setOrientation("portrait")}
-                    >
-                      Portrait
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={orientation === "landscape" ? "default" : "outline"}
-                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
-                      onClick={() => setOrientation("landscape")}
-                    >
-                      Landscape
-                    </Button>
+                  <div className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5">
+                    <span
+                      aria-hidden
+                      className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
+                        orientation === "landscape" ? "translate-x-full" : "translate-x-0"
+                      }`}
+                    />
+                    {(
+                      [
+                        ["portrait", "Portrait"],
+                        ["landscape", "Landscape"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={orientation === value}
+                        onClick={() => setOrientation(value)}
+                        className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                          orientation === value ? "text-white" : "text-neutral-950"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               ) : null}
