@@ -530,7 +530,7 @@ export function LaptopMesh({
         <AppleLogo
           size={Math.min(layout.w, layout.d) * 0.16}
           position={[0, layout.lid + Math.min(0.03, layout.lid * 0.2) + 0.006, (layout.d * 0.992) / 2]}
-          rotation={[-Math.PI / 2, 0, 0]}
+          rotation={[-Math.PI / 2, 0, Math.PI]}
           lit={logoLight}
           finish={finish.color}
         />
