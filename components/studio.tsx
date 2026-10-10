@@ -149,7 +149,6 @@ export function Studio() {
   const cinematicToken = useRef(0);
   const [apertura, setApertura] = useState(0);
   const [orientation, setOrientation] = useState<Orientation>("portrait");
-  const [time, setTime] = useState("9:41");
   const [screen, setScreen] = useState<ScreenState>({
     status: "loading",
     message: "Opening…",
@@ -401,7 +400,7 @@ export function Studio() {
             background={background}
             backgroundImage={useCustom ? customBg : null}
             finish={finish}
-            time={time || "9:41"}
+            time="9:41"
             autoRotate={autoRotate}
             logoLight={logoLight}
             cinematic={cinematic}
@@ -571,15 +570,6 @@ export function Studio() {
                   </div>
                 </div>
               ) : null}
-              <label className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Time</span>
-                <Input
-                  value={time}
-                  onChange={(event) => setTime(event.target.value.slice(0, 8))}
-                  aria-label="Time"
-                  className="h-8 border-[#ebebeb] bg-white text-[13px] shadow-none"
-                />
-              </label>
               <label className="flex flex-col gap-2">
                 <span className="flex items-center justify-between text-[13px]">
                   <span className="text-neutral-500">Light</span>
