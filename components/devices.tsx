@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 
 import type { DeviceSpec, FinishSpec, Orientation, ScreenStatus } from "@/lib/devices";
@@ -31,22 +30,6 @@ import { landscapeStatusPx } from "@/lib/devices";
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
   useEffect(() => () => geometry.dispose(), [geometry]);
   return geometry;
-}
-
-function ScreenSpinner({ position }: { position: [number, number, number] }) {
-  const ref = useRef<THREE.Mesh>(null);
-  const invalidate = useThree((state) => state.invalidate);
-  useFrame((_, delta) => {
-    if (ref.current) ref.current.rotation.z -= delta * 4.2;
-    invalidate();
-  });
-
-  return (
-    <mesh ref={ref} position={position}>
-      <ringGeometry args={[0.105, 0.132, 48, 1, 0, Math.PI * 1.35]} />
-      <meshBasicMaterial color="#171717" />
-    </mesh>
-  );
 }
 
 function FrontCamera({
@@ -220,7 +203,6 @@ function Slab({
         bodyH={frame.bodyH}
         color={finish.color}
       />
-      {status === "loading" ? <ScreenSpinner position={[0, 0.15, zFront + 0.02]} /> : null}
     </group>
   );
 }
@@ -357,7 +339,6 @@ function DuoMesh({
           finish={finish.color}
         />
         <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="left" />
-        {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
       </group>
       <group position={[0, 0, 0]} rotation={[0, (1 - apertura) * Math.PI, 0]}>
         <group position={[bodyW / 2 + gap, 0, -stack]}>
@@ -395,7 +376,6 @@ function DuoMesh({
             )}
           </group>
           <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="right" />
-          {status === "loading" && !open ? <ScreenSpinner position={[0, 0.1, -zFront - 0.02]} /> : null}
         </group>
       </group>
     </group>

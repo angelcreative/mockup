@@ -39,6 +39,13 @@ const EMPTY_SCREEN: ScreenState = {
   message: "Paste a URL to open the site",
 };
 
+function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) {
+  const scales = width * height > 600_000 ? [1] : [1, 2];
+  return scales.some(
+    (scale) => Math.abs(bitmap.width - width * scale) <= 4 && Math.abs(bitmap.height - height * scale) <= 4,
+  );
+}
+
 const DEFAULT_URL = "https://www.apple.com";
 
 const QUIET = "duration-200 ease-out motion-reduce:transition-none";
@@ -162,7 +169,20 @@ export function Studio() {
   const device = deviceById(deviceId);
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura, orientation);
-  const loading = screen.status === "loading";
+  const viewportKey = `${viewport.width}x${viewport.height}`;
+  const [shownViewport, setShownViewport] = useState(viewportKey);
+  const awaitingViewport = useRef<{ width: number; height: number } | null>(null);
+  const opening = screen.status === "loading" && screen.message === "Opening…";
+  if (shownViewport !== viewportKey) {
+    setShownViewport(viewportKey);
+    awaitingViewport.current = { width: viewport.width, height: viewport.height };
+    rememberFrame(null);
+    setScreen((current) => {
+      if (current.status === "empty" || current.status === "error") return current;
+      if (current.message === "Opening…") return { status: "loading", message: "Opening…" };
+      return { status: "loading", message: "" };
+    });
+  }
   const handheld = device.kind === "phone" || device.kind === "tablet" || device.kind === "duo";
 
   function rememberFrame(next: ImageBitmap | null) {
@@ -285,6 +305,12 @@ export function Studio() {
             bitmap.close();
             return;
           }
+          const expected = awaitingViewport.current;
+          if (expected && !bitmapFitsViewport(bitmap, expected.width, expected.height)) {
+            bitmap.close();
+            return;
+          }
+          awaitingViewport.current = null;
           rememberFrame(bitmap);
           setScreen({ status: "ready", message: "" });
         })
@@ -381,8 +407,8 @@ export function Studio() {
                 ))}
               </SelectContent>
             </Select>
-            <Button type="submit" disabled={loading} className="h-9 px-3.5">
-              {loading ? "Opening…" : "Open"}
+            <Button type="submit" disabled={opening} className="h-9 px-3.5">
+              {opening ? "Opening…" : "Open"}
             </Button>
           </div>
         </form>

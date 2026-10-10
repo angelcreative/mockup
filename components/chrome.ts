@@ -237,6 +237,28 @@ function drawHomeIndicator(
   context.fill();
 }
 
+function drawLoader(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  angle: number,
+) {
+  if (width < 4 || height < 4) return;
+  const radius = Math.min(Math.max(18, Math.min(width, height) * 0.045), 56);
+  context.save();
+  context.translate(x + width / 2, y + height / 2);
+  context.rotate(angle);
+  context.strokeStyle = "rgba(70,70,70,0.72)";
+  context.lineWidth = Math.max(2.4, radius * 0.14);
+  context.lineCap = "round";
+  context.beginPath();
+  context.arc(0, 0, radius, 0, Math.PI * 1.35);
+  context.stroke();
+  context.restore();
+}
+
 function drawMessage(
   context: CanvasRenderingContext2D,
   status: ScreenStatus,
@@ -285,6 +307,8 @@ export function paintScreen(
   cssHeight = device.height,
   orientation: "portrait" | "landscape" = "portrait",
   time = "9:41",
+  reveal = 1,
+  spin = 0,
 ) {
   const scale = 2;
   const width = Math.max(2, Math.round(cssWidth * scale));
@@ -335,7 +359,19 @@ export function paintScreen(
   context.fillStyle = "#f7f7f7";
   context.fillRect(0, top, pageW, pageH);
 
-  if (drewFrame && frame) {
+  const showLoader = reveal < 1 && status !== "error" && status !== "empty";
+  if (showLoader) {
+    if (splitMessage) {
+      drawLoader(context, 0, top, pageW / 2, pageH, spin);
+      drawLoader(context, pageW / 2, top, pageW / 2, pageH, spin);
+    } else {
+      drawLoader(context, 0, top, pageW, pageH, spin);
+    }
+  }
+
+  if (drewFrame && frame && reveal > 0) {
+    context.save();
+    context.globalAlpha = reveal;
     try {
       if (landscape) {
         drawLandscape(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
@@ -345,13 +381,14 @@ export function paintScreen(
     } catch {
       drawMessage(context, status, message, 0, top, messageWidth, pageH);
     }
-  } else if (landscape) {
+    context.restore();
+  } else if (!showLoader && landscape) {
     context.save();
     context.translate(pageW / 2, top + pageH / 2);
     context.rotate(Math.PI / 2);
     drawMessage(context, status, message, -pageH / 2, -messageWidth / 2, pageH, messageWidth);
     context.restore();
-  } else {
+  } else if (!showLoader) {
     drawMessage(context, status, message, 0, top, messageWidth, pageH);
   }
 

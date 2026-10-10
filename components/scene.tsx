@@ -76,8 +76,12 @@ function useDeviceTexture(
   const rightTexture = useMemo(() => makeCanvasTexture(rightCanvas), [rightCanvas]);
   const invalidate = useThree((state) => state.invalidate);
   const bounds = device.id === "iphone-duo" ? duoScreen(apertura) : { width: device.width, height: device.height, split: false as const };
+  const reveal = useRef(0);
+  const spin = useRef(0);
+  const fadeStart = useRef<number | null>(null);
+  const paintRef = useRef<(revealValue: number, spinValue: number) => void>(() => undefined);
 
-  useLayoutEffect(() => {
+  const paint = (revealValue: number, spinValue: number) => {
     if (frame && (frame.width < 1 || frame.height < 1)) return;
     paintScreen(
       canvas,
@@ -91,6 +95,8 @@ function useDeviceTexture(
       bounds.height,
       isComputer(device) ? "portrait" : orientation,
       time,
+      revealValue,
+      spinValue,
     );
     if (bounds.split) {
       copyPanel(canvas, leftCanvas, "left");
@@ -100,6 +106,23 @@ function useDeviceTexture(
     } else {
       publishTexture(texture, canvas);
     }
+  };
+  paintRef.current = paint;
+
+  useLayoutEffect(() => {
+    const showing = Boolean(frame && frame.width >= 1 && frame.height >= 1);
+    if (!showing) {
+      reveal.current = 0;
+      fadeStart.current = null;
+    } else if (reveal.current < 1 && fadeStart.current === null) {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        reveal.current = 1;
+      } else {
+        fadeStart.current = performance.now();
+        reveal.current = 0;
+      }
+    }
+    paint(reveal.current, spin.current);
     invalidate();
   }, [
     bounds.height,
@@ -119,6 +142,22 @@ function useDeviceTexture(
     status,
     texture,
   ]);
+
+  useFrame((_, delta) => {
+    if (reveal.current >= 1 && fadeStart.current === null) return;
+    if (status === "error" || status === "empty") return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduce) spin.current = (spin.current + delta * 3.4) % (Math.PI * 2);
+    if (fadeStart.current !== null) {
+      const t = Math.min(1, (performance.now() - fadeStart.current) / 300);
+      reveal.current = reduce ? 1 : 1 - (1 - t) ** 3;
+      if (t >= 1 || reduce) fadeStart.current = null;
+    } else if (reduce) {
+      return;
+    }
+    paintRef.current(reveal.current, spin.current);
+    invalidate();
+  });
 
   useEffect(
     () => () => {
