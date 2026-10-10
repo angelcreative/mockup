@@ -87,3 +87,24 @@ export function topNotchGeometry(width: number, height: number, radius: number) 
   shape.closePath();
   return new THREE.ShapeGeometry(shape, 12);
 }
+
+/** Half of a capsule. The flat edge sits on x = 0 and the rounded end extends toward the panel. */
+export function halfPillGeometry(width: number, height: number, side: "left" | "right") {
+  const w = Math.max(width, 0.001);
+  const h = Math.max(height, 0.001);
+  const r = Math.min(h / 2, w);
+  const shape = new THREE.Shape();
+  if (side === "left") {
+    shape.moveTo(0, h / 2);
+    shape.lineTo(0, -h / 2);
+    shape.lineTo(-w + r, -h / 2);
+    shape.absarc(-w + r, 0, r, -Math.PI / 2, Math.PI / 2, true);
+  } else {
+    shape.moveTo(0, h / 2);
+    shape.lineTo(0, -h / 2);
+    shape.lineTo(w - r, -h / 2);
+    shape.absarc(w - r, 0, r, -Math.PI / 2, Math.PI / 2, false);
+  }
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape, 16);
+}

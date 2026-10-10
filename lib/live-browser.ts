@@ -29,6 +29,7 @@ type Session = {
   idle: NodeJS.Timeout | null;
   chain: Promise<void>;
   closed: boolean;
+  paused: boolean;
 };
 
 let browser: Browser | null = null;
@@ -208,6 +209,10 @@ async function show(session: Session, profile: ViewportProfile, url: string, rel
     });
   }
 
+  if (session.paused) {
+    send(session.ws, { type: "status", state: "ready" });
+    return;
+  }
   await bindScreencast(session, profile);
   send(session.ws, { type: "status", state: "ready" });
 }
@@ -284,6 +289,7 @@ export function attachLiveSocket(ws: WebSocket) {
     idle: null,
     chain: Promise.resolve(),
     closed: false,
+    paused: false,
   };
   active = session;
   bumpIdle(session);
@@ -297,6 +303,22 @@ export function attachLiveSocket(ws: WebSocket) {
     }
     bumpIdle(session);
     if (parsed.type === "ping") return;
+    if (parsed.type === "pause") {
+      session.paused = true;
+      void enqueue(session, async () => {
+        if (session.closed || active !== session) return;
+        await stopScreencast(session);
+      });
+      return;
+    }
+    if (parsed.type === "resume") {
+      session.paused = false;
+      void enqueue(session, async () => {
+        if (session.closed || active !== session || session.paused) return;
+        if (session.page && session.profile) await bindScreencast(session, session.profile);
+      });
+      return;
+    }
 
     void enqueue(session, async () => {
       if (session.closed || active !== session) return;

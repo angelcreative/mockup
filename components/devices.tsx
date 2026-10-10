@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { DeviceSpec, FinishSpec, Orientation, ScreenStatus } from "@/lib/devices";
@@ -18,6 +18,7 @@ import {
 } from "@/lib/devices";
 import {
   frameSize,
+  halfPillGeometry,
   roundedBodyGeometry,
   roundedRectGeometry,
   topNotchGeometry,
@@ -33,8 +34,10 @@ function useDisposable<T extends { dispose: () => void }>(geometry: T) {
 
 function ScreenSpinner({ position }: { position: [number, number, number] }) {
   const ref = useRef<THREE.Mesh>(null);
+  const invalidate = useThree((state) => state.invalidate);
   useFrame((_, delta) => {
     if (ref.current) ref.current.rotation.z -= delta * 4.2;
+    invalidate();
   });
 
   return (
@@ -271,12 +274,28 @@ function DuoMesh({
       [outerW, outerH, radius],
     ),
   );
-  const island = useDisposable(
+  const outerIsland = useDisposable(
     useMemo(() => {
-      const height = (open ? innerH : outerH) * (ISLAND_POINTS.height / (open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT));
-      const width = (open ? innerHalfW * 2 : outerW) * (ISLAND_POINTS.width / (open ? DUO_INNER_WIDTH : DUO_OUTER_WIDTH));
+      const height = outerH * (ISLAND_POINTS.height / DUO_OUTER_HEIGHT);
+      const width = outerW * (ISLAND_POINTS.width / DUO_OUTER_WIDTH);
       return roundedRectGeometry(width, height, height / 2);
-    }, [innerH, innerHalfW, open, outerH, outerW]),
+    }, [outerH, outerW]),
+  );
+  const innerIsland = useDisposable(
+    useMemo(() => {
+      const height = innerH * (ISLAND_POINTS.height / DUO_INNER_HEIGHT);
+      const width = ((innerHalfW * 2) * (ISLAND_POINTS.width / DUO_INNER_WIDTH)) / 2;
+      return {
+        height,
+        width,
+        left: halfPillGeometry(width, height, "left"),
+        right: halfPillGeometry(width, height, "right"),
+        dispose() {
+          this.left.dispose();
+          this.right.dispose();
+        },
+      };
+    }, [innerH, innerHalfW]),
   );
 
   // ExtrudeGeometry's bevel makes the shell thicker than `depth` on the back face.
@@ -285,10 +304,10 @@ function DuoMesh({
   const centerShift = (bodyW / 2) * (1 - apertura);
   const stack = (depth + 0.07) * (1 - apertura);
   const innerShift = (bodyW - innerHalfW) / 2 + 0.04;
-  const screenH = open ? innerH : outerH;
-  const cssH = open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT;
-  const islandH = screenH * (ISLAND_POINTS.height / cssH);
-  const islandY = screenH / 2 - screenH * (ISLAND_POINTS.top / cssH) - islandH / 2;
+  const outerIslandH = outerH * (ISLAND_POINTS.height / DUO_OUTER_HEIGHT);
+  const outerIslandY = outerH / 2 - outerH * (ISLAND_POINTS.top / DUO_OUTER_HEIGHT) - outerIslandH / 2;
+  const innerIslandY = innerH / 2 - innerH * (ISLAND_POINTS.top / DUO_INNER_HEIGHT) - innerIsland.height / 2;
+  const islandOverlap = innerIsland.width * 0.1;
   const hingeMetal = "#c5ccd4";
 
   return (
@@ -309,6 +328,11 @@ function DuoMesh({
           >
           <meshBasicMaterial map={leftTexture} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
+        {open ? (
+          <mesh geometry={innerIsland.left} position={[bodyW / 2 + islandOverlap, innerIslandY, zFront + 0.012]}>
+            <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
+          </mesh>
+        ) : null}
         <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} radius={radius} />
         <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="left" />
         {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
@@ -326,6 +350,14 @@ function DuoMesh({
           >
             <meshBasicMaterial map={rightTexture} toneMapped={false} side={THREE.DoubleSide} />
           </mesh>
+          {open ? (
+            <mesh
+              geometry={innerIsland.right}
+              position={[-bodyW / 2 - gap - islandOverlap, innerIslandY, zFront + 0.012]}
+            >
+              <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
+            </mesh>
+          ) : null}
           <group position={[0, 0, -zFront]} rotation={[0, Math.PI, 0]}>
             <mesh
               geometry={outerGlass}
@@ -335,7 +367,7 @@ function DuoMesh({
               <meshBasicMaterial map={texture} toneMapped={false} side={THREE.DoubleSide} />
             </mesh>
             {open ? null : (
-              <mesh geometry={island} position={[0, islandY, 0.01]}>
+              <mesh geometry={outerIsland} position={[0, outerIslandY, 0.01]}>
                 <meshBasicMaterial color="#050505" />
               </mesh>
             )}
@@ -344,11 +376,6 @@ function DuoMesh({
           {status === "loading" && !open ? <ScreenSpinner position={[0, 0.1, -zFront - 0.02]} /> : null}
         </group>
       </group>
-      {open ? (
-        <mesh geometry={island} position={[0, islandY, zFront + 0.01]}>
-          <meshBasicMaterial color="#050505" />
-        </mesh>
-      ) : null}
     </group>
   );
 }

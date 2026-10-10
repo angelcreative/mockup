@@ -70,10 +70,11 @@ function useDeviceTexture(
   const texture = useMemo(() => makeCanvasTexture(canvas), [canvas]);
   const leftTexture = useMemo(() => makeCanvasTexture(leftCanvas), [leftCanvas]);
   const rightTexture = useMemo(() => makeCanvasTexture(rightCanvas), [rightCanvas]);
+  const invalidate = useThree((state) => state.invalidate);
+  const bounds = device.id === "iphone-duo" ? duoScreen(apertura) : { width: device.width, height: device.height, split: false as const };
 
   useLayoutEffect(() => {
     if (frame && (frame.width < 1 || frame.height < 1)) return;
-    const bounds = device.id === "iphone-duo" ? duoScreen(apertura) : { width: device.width, height: device.height, split: false };
     paintScreen(
       canvas,
       device,
@@ -87,17 +88,24 @@ function useDeviceTexture(
       isComputer(device) ? "portrait" : orientation,
       time,
     );
-    copyPanel(canvas, leftCanvas, bounds.split ? "left" : "full");
-    copyPanel(canvas, rightCanvas, bounds.split ? "right" : "full");
-    publishTexture(texture, canvas);
-    publishTexture(leftTexture, leftCanvas);
-    publishTexture(rightTexture, rightCanvas);
+    if (bounds.split) {
+      copyPanel(canvas, leftCanvas, "left");
+      copyPanel(canvas, rightCanvas, "right");
+      publishTexture(leftTexture, leftCanvas);
+      publishTexture(rightTexture, rightCanvas);
+    } else {
+      publishTexture(texture, canvas);
+    }
+    invalidate();
   }, [
-    apertura,
+    bounds.height,
+    bounds.split,
+    bounds.width,
     canvas,
     time,
     device,
     frame,
+    invalidate,
     leftCanvas,
     leftTexture,
     message,
@@ -620,7 +628,8 @@ export default function Scene({
 }) {
   return (
     <Canvas
-      dpr={2}
+      dpr={[1, 2]}
+      frameloop="demand"
       camera={{ position: [7.6, 2.6, 10.4], fov: 28 }}
       gl={{
         preserveDrawingBuffer: true,

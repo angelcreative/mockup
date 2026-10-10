@@ -91,6 +91,16 @@ export function Studio() {
   }
 
   useEffect(() => {
+    const syncStream = () => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: document.hidden ? "pause" : "resume" }));
+    };
+    document.addEventListener("visibilitychange", syncStream);
+    return () => document.removeEventListener("visibilitychange", syncStream);
+  }, []);
+
+  useEffect(() => {
     const ping = window.setInterval(() => {
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -144,6 +154,7 @@ export function Studio() {
       openedRef.current = target;
       sentSize.current = key;
       socket.send(JSON.stringify({ type: "open", url: target, width, height }));
+      if (document.hidden) socket.send(JSON.stringify({ type: "pause" }));
     };
 
     socket.onmessage = (event) => {
@@ -165,6 +176,7 @@ export function Studio() {
         }
         return;
       }
+      if (document.hidden) return;
       const bytes = event.data as ArrayBuffer;
       createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
         .then((bitmap) => {

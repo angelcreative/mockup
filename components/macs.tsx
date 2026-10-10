@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import type { DeviceSpec, FinishSpec, ScreenStatus } from "@/lib/devices";
-import { roundedBodyGeometry, roundedRectGeometry, topNotchGeometry } from "@/components/geometry";
+import { roundedBodyGeometry, roundedRectGeometry, roundedRectShape, topNotchGeometry } from "@/components/geometry";
 
 const LAPTOP_SCALE = 0.2;
 const IMAC_SCALE = 0.15;
@@ -152,49 +152,222 @@ function screenData(device: DeviceSpec) {
   };
 }
 
-function Keys({
+type KeyRole = "key" | "space" | "id";
+
+type PlacedKey = {
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  role: KeyRole;
+};
+
+const KEY_ROWS: (number | null)[][] = [
+  [1, null, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.28],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5],
+  [1.42, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.22],
+  [1.68, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.82],
+  [1.85, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.05, 1],
+  [1.12, 1.1, 1.15, 1.25, 4.35, 1.18, 1.02, 1, 1, 1],
+];
+
+function keyCapGeometry(width: number, depth: number, height: number) {
+  const radius = Math.min(width, depth) * 0.22;
+  const bevel = Math.min(0.0032, height * 0.3);
+  const geometry = new THREE.ExtrudeGeometry(roundedRectShape(width, depth, radius), {
+    depth: Math.max(0.004, height - bevel * 2),
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: Math.min(bevel, radius * 0.45),
+    bevelSegments: 1,
+    curveSegments: 5,
+  });
+  geometry.translate(-width / 2, -depth / 2, -height / 2);
+  geometry.rotateX(Math.PI / 2);
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  if (box) {
+    geometry.translate(
+      -(box.min.x + box.max.x) / 2,
+      -(box.min.y + box.max.y) / 2,
+      -(box.min.z + box.max.z) / 2,
+    );
+  }
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function layoutKeys(width: number, depth: number, pro: boolean, wide: boolean) {
+  const gapUnit = 0.5;
+  const unitsOf = (row: (number | null)[]) => row.reduce<number>((sum, cell) => sum + (cell ?? gapUnit), 0);
+  const boardW = width * (wide ? 0.8 : 0.86);
+  const unit = boardW / Math.max(...KEY_ROWS.map(unitsOf));
+  const gutter = unit * 0.15;
+  const keyD = unit * 0.7;
+  const rowPitch = unit * 0.9;
+  const placed: PlacedKey[] = [];
+  const rowOf: number[] = [];
+  let z = -depth / 2 + depth * 0.07 + keyD / 2;
+
+  KEY_ROWS.forEach((row, rowIndex) => {
+    const total = unitsOf(row) * unit;
+    let x = -total / 2;
+    row.forEach((cell, index) => {
+      const span = (cell ?? gapUnit) * unit;
+      if (cell !== null) {
+        const role: KeyRole =
+          rowIndex === 5 && cell > 3 ? "space" : rowIndex === 0 && index === row.length - 1 ? "id" : "key";
+        placed.push({ x: x + span / 2, z, w: Math.max(0.02, span - gutter), d: keyD, role });
+        rowOf.push(rowIndex);
+      }
+      x += span;
+    });
+    z += rowPitch + (rowIndex === 0 ? unit * 0.22 : 0);
+  });
+
+  const bottom = placed.filter((_, index) => rowOf[index] === 5);
+  const shift = placed.filter((_, index) => rowOf[index] === 4);
+  const down = bottom[bottom.length - 2];
+  const upKey = shift[shift.length - 1];
+  if (upKey && down) upKey.x = down.x;
+
+  const regular = placed.filter((key) => key.role === "key");
+  const space = placed.find((key) => key.role === "space") ?? null;
+  const touchId = placed.find((key) => key.role === "id") ?? null;
+  const minX = Math.min(...placed.map((key) => key.x - key.w / 2));
+  const maxX = Math.max(...placed.map((key) => key.x + key.w / 2));
+  const minZ = Math.min(...placed.map((key) => key.z - key.d / 2));
+  const maxZ = Math.max(...placed.map((key) => key.z + key.d / 2));
+  const trackD = depth * (pro ? 0.27 : 0.23);
+  const trackW = width * (pro ? (wide ? 0.4 : 0.46) : wide ? 0.36 : 0.4);
+  const palmStart = maxZ + unit * 0.28;
+  const palmEnd = depth / 2 - depth * 0.055;
+  const fittedD = Math.min(trackD, Math.max(0.4, (palmEnd - palmStart) * 0.78));
+  const trackZ = palmStart + (palmEnd - palmStart) / 2;
+
+  return {
+    regular,
+    space,
+    touchId,
+    unit,
+    well: {
+      w: maxX - minX + unit * 0.42,
+      d: maxZ - minZ + unit * 0.34,
+      x: (minX + maxX) / 2,
+      z: (minZ + maxZ) / 2,
+    },
+    track: { w: trackW, d: fittedD, z: trackZ },
+  };
+}
+
+function Keyboard({
   width,
   depth,
-  y,
+  deckTop,
   dark,
+  finish,
+  model,
 }: {
   width: number;
   depth: number;
-  y: number;
+  deckTop: number;
   dark: boolean;
+  finish: string;
+  model: string;
 }) {
-  const ref = useRef<THREE.InstancedMesh>(null);
-  const cols = Math.max(12, Math.round(width / 0.34));
-  const rows = 5;
-  const count = cols * rows;
-  const marginX = width * 0.08;
-  const keyW = ((width - marginX * 2) / cols) * 0.78;
-  const keyD = (depth * 0.46) / rows * 0.72;
-  const geometry = useDisposable(useMemo(() => new THREE.BoxGeometry(keyW, 0.014, keyD), [keyD, keyW]));
+  const keysRef = useRef<THREE.InstancedMesh>(null);
+  const pro = model.includes("pro");
+  const wide = model.endsWith("15") || model.endsWith("16");
+  const layout = useMemo(() => layoutKeys(width, depth, pro, wide), [depth, pro, wide, width]);
+  const { regular, space, touchId } = layout;
+  const sample = regular[0];
+  const keyH = 0.011;
+  const keyY = deckTop + keyH / 2 + 0.002;
+  const unitGeo = useDisposable(
+    useMemo(
+      () => keyCapGeometry(sample?.w ?? 0.2, sample?.d ?? 0.16, keyH),
+      [sample?.d, sample?.w],
+    ),
+  );
+  const spaceGeo = useDisposable(
+    useMemo(() => (space ? keyCapGeometry(space.w, space.d, keyH) : new THREE.BoxGeometry(0.01, 0.01, 0.01)), [space]),
+  );
+  const idGeo = useDisposable(
+    useMemo(
+      () => (touchId ? keyCapGeometry(touchId.w, touchId.d, keyH) : new THREE.BoxGeometry(0.01, 0.01, 0.01)),
+      [touchId],
+    ),
+  );
+  const wellGeo = useDisposable(
+    useMemo(
+      () => roundedRectGeometry(layout.well.w, layout.well.d, Math.min(0.08, layout.unit * 0.22)),
+      [layout.unit, layout.well.d, layout.well.w],
+    ),
+  );
+  const trackGeo = useDisposable(
+    useMemo(
+      () => roundedRectGeometry(layout.track.w, layout.track.d, Math.min(layout.track.d, layout.track.w) * 0.16),
+      [layout.track.d, layout.track.w],
+    ),
+  );
+  const wellColor = useMemo(() => {
+    const color = new THREE.Color(finish);
+    color.multiplyScalar(dark ? 0.78 : 0.9);
+    return `#${color.getHexString()}`;
+  }, [dark, finish]);
+  const padColor = useMemo(() => {
+    const color = new THREE.Color(finish);
+    color.multiplyScalar(dark ? 1.12 : 0.8);
+    return `#${color.getHexString()}`;
+  }, [dark, finish]);
 
   useLayoutEffect(() => {
-    const mesh = ref.current;
-    if (!mesh) return;
+    const mesh = keysRef.current;
+    if (!mesh || !sample) return;
     const dummy = new THREE.Object3D();
-    const x0 = -width / 2 + marginX + (width - marginX * 2) / cols / 2;
-    const z0 = -depth / 2 + depth * 0.16;
-    const zStep = (depth * 0.46) / rows;
-    let index = 0;
-    for (let row = 0; row < rows; row += 1) {
-      for (let col = 0; col < cols; col += 1) {
-        dummy.position.set(x0 + col * ((width - marginX * 2) / cols), y, z0 + row * zStep);
-        dummy.updateMatrix();
-        mesh.setMatrixAt(index, dummy.matrix);
-        index += 1;
-      }
-    }
+    regular.forEach((key, index) => {
+      dummy.position.set(key.x, keyY, key.z);
+      dummy.scale.set(key.w / sample.w, 1, key.d / sample.d);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+    });
     mesh.instanceMatrix.needsUpdate = true;
-  }, [cols, count, depth, marginX, rows, width, y]);
+    mesh.computeBoundingSphere();
+    mesh.computeBoundingBox();
+  }, [keyY, regular, sample]);
 
   return (
-    <instancedMesh ref={ref} args={[geometry, undefined, count]}>
-      <meshStandardMaterial color={dark ? "#3e4046" : "#1c1d21"} roughness={0.55} metalness={0.22} />
-    </instancedMesh>
+    <group>
+      <mesh geometry={wellGeo} rotation={[-Math.PI / 2, 0, 0]} position={[layout.well.x, deckTop + 0.0015, layout.well.z]}>
+        <meshStandardMaterial color={wellColor} roughness={0.62} metalness={0.18} />
+      </mesh>
+      <instancedMesh ref={keysRef} args={[unitGeo, undefined, Math.max(1, regular.length)]}>
+        <meshStandardMaterial color={dark ? "#4a4d55" : "#1b1c20"} roughness={0.48} metalness={0.16} />
+      </instancedMesh>
+      {space ? (
+        <mesh geometry={spaceGeo} position={[space.x, keyY, space.z]}>
+          <meshStandardMaterial color={dark ? "#4a4d55" : "#1b1c20"} roughness={0.48} metalness={0.16} />
+        </mesh>
+      ) : null}
+      {touchId ? (
+        <group position={[touchId.x, keyY, touchId.z]}>
+          <mesh geometry={idGeo}>
+            <meshStandardMaterial color={dark ? "#3a3d44" : "#121316"} roughness={0.42} metalness={0.2} />
+          </mesh>
+          <mesh position={[0, keyH / 2 + 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[touchId.d * 0.16, touchId.d * 0.24, 24]} />
+            <meshStandardMaterial color={dark ? "#8e929a" : "#6d7076"} roughness={0.35} metalness={0.4} />
+          </mesh>
+        </group>
+      ) : null}
+      <mesh
+        geometry={trackGeo}
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, deckTop + 0.0025, layout.track.z]}
+      >
+        <meshStandardMaterial color={padColor} roughness={0.28} metalness={0.42} />
+      </mesh>
+    </group>
   );
 }
 
@@ -247,16 +420,7 @@ export function LaptopMesh({
   const notchGeo = useDisposable(
     useMemo(() => topNotchGeometry(notchW, notchH, notchH * 0.42), [notchH, notchW]),
   );
-  const deckWell = useDisposable(
-    useMemo(
-      () => roundedRectGeometry(layout.w * 0.9, layout.d * 0.5, 0.06),
-      [layout.d, layout.w],
-    ),
-  );
-  const trackW = layout.w * 0.36;
-  const trackD = layout.d * 0.24;
-  const trackGeo = useDisposable(useMemo(() => roundedRectGeometry(trackW, trackD, 0.08), [trackD, trackW]));
-
+  const deckTop = layout.deck + Math.min(0.03, layout.deck * 0.2);
   const screenZ = layout.d / 2;
   const notchZ = screenZ + screenH / 2 - notchH / 2;
 
@@ -265,17 +429,14 @@ export function LaptopMesh({
       <mesh geometry={deckGeo} rotation={[Math.PI / 2, 0, 0]} position={[0, layout.deck / 2, 0]}>
         <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
       </mesh>
-      <mesh geometry={deckWell} rotation={[-Math.PI / 2, 0, 0]} position={[0, layout.deck + 0.004, -layout.d * 0.08]}>
-        <meshStandardMaterial color={dark ? "#101114" : "#d7d8dc"} roughness={0.55} metalness={0.2} />
-      </mesh>
-      <Keys width={layout.w} depth={layout.d} y={layout.deck + 0.012} dark={dark} />
-      <mesh
-        geometry={trackGeo}
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, layout.deck + 0.008, layout.d * 0.28]}
-      >
-        <meshStandardMaterial color={dark ? "#2c2d32" : "#c5c6ca"} roughness={0.4} metalness={0.28} />
-      </mesh>
+      <Keyboard
+        width={layout.w}
+        depth={layout.d}
+        deckTop={deckTop}
+        dark={dark}
+        finish={finish.color}
+        model={device.id}
+      />
       <mesh position={[0, layout.hingeY - 0.01, -layout.d / 2]} rotation={[0, 0, Math.PI / 2]}>
         <cylinderGeometry args={[layout.lid * 0.55, layout.lid * 0.55, layout.w * 0.72, 20]} />
         <meshStandardMaterial color={dark ? "#3a3b40" : "#b7b8bc"} metalness={0.8} roughness={0.28} />
