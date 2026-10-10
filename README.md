@@ -14,7 +14,7 @@ npx playwright install chromium
 npm run dev
 ```
 
-Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `https://angelsanchez.design`, and that page loads when the app opens.
+Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `https://www.apple.com`, and that page loads when the app opens.
 
 ## Use
 

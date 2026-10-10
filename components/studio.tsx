@@ -38,7 +38,7 @@ const EMPTY_SCREEN: ScreenState = {
   message: "Paste a URL to open the site",
 };
 
-const DEFAULT_URL = "https://angelsanchez.design";
+const DEFAULT_URL = "https://www.apple.com";
 
 function socketUrl() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
