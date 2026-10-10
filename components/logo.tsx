@@ -1,68 +1,63 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
-const SIZE = 256;
+const MASK_SRC = "/apple-logo.png";
+const BLOOM_SCALE = 6.4;
 
-function appleCanvas() {
+type LogoMaps = {
+  mask: THREE.Texture;
+  bloom: THREE.Texture;
+  aspect: number;
+};
+
+let cached: LogoMaps | null = null;
+let loading: Promise<LogoMaps> | null = null;
+
+function maskFrom(image: HTMLImageElement) {
+  const width = 512;
+  const height = Math.max(1, Math.round(width * (image.height / image.width)));
   const canvas = document.createElement("canvas");
-  canvas.width = SIZE;
-  canvas.height = SIZE;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-  ctx.clearRect(0, 0, SIZE, SIZE);
-  ctx.translate(SIZE / 2, SIZE * 0.54);
-  const s = SIZE;
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.moveTo(0, -s * 0.3);
-  ctx.bezierCurveTo(-s * 0.2, -s * 0.46, -s * 0.46, -s * 0.2, -s * 0.38, s * 0.02);
-  ctx.bezierCurveTo(-s * 0.48, s * 0.28, -s * 0.22, s * 0.44, 0, s * 0.34);
-  ctx.bezierCurveTo(s * 0.22, s * 0.44, s * 0.48, s * 0.28, s * 0.38, s * 0.02);
-  ctx.bezierCurveTo(s * 0.46, -s * 0.2, s * 0.2, -s * 0.46, 0, -s * 0.3);
-  ctx.closePath();
-  ctx.fill();
-  ctx.globalCompositeOperation = "destination-out";
-  ctx.beginPath();
-  ctx.arc(s * 0.2, -s * 0.02, s * 0.13, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.ellipse(-s * 0.06, -s * 0.36, s * 0.11, s * 0.042, -0.9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-s * 0.012, -s * 0.28);
-  ctx.quadraticCurveTo(s * 0.01, -s * 0.42, s * 0.055, -s * 0.4);
-  ctx.lineTo(s * 0.04, -s * 0.36);
-  ctx.quadraticCurveTo(s * 0.012, -s * 0.34, s * 0.02, -s * 0.26);
-  ctx.closePath();
-  ctx.fill();
-  return canvas;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return textureFromCanvas(canvas);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, width, height);
+  const source = context.getImageData(0, 0, width, height);
+  const out = context.createImageData(width, height);
+  const radius = 7;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let total = 0;
+      let count = 0;
+      for (let ky = -radius; ky <= radius; ky += 1) {
+        const sy = y + ky;
+        if (sy < 0 || sy >= height) continue;
+        for (let kx = -radius; kx <= radius; kx += 1) {
+          const sx = x + kx;
+          if (sx < 0 || sx >= width) continue;
+          total += source.data[(sy * width + sx) * 4 + 3];
+          count += 1;
+        }
+      }
+      const offset = (y * width + x) * 4;
+      out.data[offset] = 255;
+      out.data[offset + 1] = 255;
+      out.data[offset + 2] = 255;
+      out.data[offset + 3] = Math.round(total / count);
+    }
+  }
+  context.putImageData(out, 0, 0);
+  return textureFromCanvas(canvas);
 }
 
-function haloCanvas() {
-  const canvas = document.createElement("canvas");
-  canvas.width = SIZE;
-  canvas.height = SIZE;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-  const gradient = ctx.createRadialGradient(SIZE / 2, SIZE / 2, SIZE * 0.08, SIZE / 2, SIZE / 2, SIZE * 0.48);
-  gradient.addColorStop(0, "rgba(255,255,255,0.95)");
-  gradient.addColorStop(0.28, "rgba(255,255,255,0.45)");
-  gradient.addColorStop(0.62, "rgba(255,255,255,0.12)");
-  gradient.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, SIZE, SIZE);
-  return canvas;
-}
-
-function canvasTexture(canvas: HTMLCanvasElement) {
+function textureFromCanvas(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 4;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
@@ -70,21 +65,76 @@ function canvasTexture(canvas: HTMLCanvasElement) {
   return texture;
 }
 
-let maps: { apple: THREE.Texture; halo: THREE.Texture } | null = null;
-
-function logoMaps() {
-  if (maps) return maps;
-  if (typeof document === "undefined") return null;
-  maps = { apple: canvasTexture(appleCanvas()), halo: canvasTexture(haloCanvas()) };
-  return maps;
+function blurPass(source: HTMLCanvasElement, radius: number) {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const context = canvas.getContext("2d");
+  if (!context) return canvas;
+  context.filter = `blur(${radius}px)`;
+  context.drawImage(source, 0, 0);
+  context.filter = "none";
+  return canvas;
 }
 
-function luminance(hex: string) {
-  const value = hex.replace("#", "");
-  const r = parseInt(value.slice(0, 2), 16);
-  const g = parseInt(value.slice(2, 4), 16);
-  const b = parseInt(value.slice(4, 6), 16);
-  return r * 0.2126 + g * 0.7152 + b * 0.0722;
+function bloomFrom(image: HTMLImageElement) {
+  const width = 512;
+  const height = Math.max(1, Math.round(width * (image.height / image.width)));
+  const mark = document.createElement("canvas");
+  mark.width = width;
+  mark.height = height;
+  const markContext = mark.getContext("2d");
+  if (!markContext) return textureFromCanvas(mark);
+  const markW = width / BLOOM_SCALE;
+  const markH = markW * (image.height / image.width);
+  markContext.clearRect(0, 0, width, height);
+  markContext.drawImage(image, (width - markW) / 2, (height - markH) / 2, markW, markH);
+  const tight = blurPass(mark, Math.round(Math.min(width, height) * 0.07));
+  const wide = blurPass(mark, Math.round(Math.min(width, height) * 0.12));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return textureFromCanvas(canvas);
+  context.drawImage(wide, 0, 0);
+  context.globalAlpha = 0.72;
+  context.drawImage(tight, 0, 0);
+  const pixels = context.getImageData(0, 0, width, height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const alpha = Math.round(pixels.data[index + 3] * 0.26);
+    pixels.data[index] = 255;
+    pixels.data[index + 1] = 255;
+    pixels.data[index + 2] = 255;
+    pixels.data[index + 3] = alpha < 3 ? 0 : alpha;
+  }
+  context.putImageData(pixels, 0, 0);
+  return textureFromCanvas(canvas);
+}
+
+function loadLogoMaps() {
+  if (cached) return Promise.resolve(cached);
+  if (!loading) {
+    loading = new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => {
+        cached = {
+          mask: maskFrom(image),
+          bloom: bloomFrom(image),
+          aspect: image.width / image.height,
+        };
+        resolve(cached);
+      };
+      image.onerror = () => reject(new Error("logo"));
+      image.src = MASK_SRC;
+    });
+  }
+  return loading;
+}
+
+function cutoutColor(hex: string) {
+  const color = new THREE.Color(hex);
+  color.multiplyScalar(0.08);
+  return `#${color.getHexString()}`;
 }
 
 export function AppleLogo({
@@ -100,58 +150,85 @@ export function AppleLogo({
   lit: boolean;
   finish: string;
 }) {
-  const textures = useMemo(() => logoMaps(), []);
-  const mark = useRef<THREE.MeshBasicMaterial>(null);
-  const halo = useRef<THREE.MeshBasicMaterial>(null);
-  const glow = useRef(lit ? 1 : 0);
+  const [maps, setMaps] = useState<LogoMaps | null>(cached);
+  const cutout = useRef<THREE.MeshBasicMaterial>(null);
+  const glow = useRef<THREE.MeshBasicMaterial>(null);
+  const bloom = useRef<THREE.MeshBasicMaterial>(null);
+  const amount = useRef(lit ? 1 : 0);
   const litRef = useRef(lit);
   const invalidate = useThree((state) => state.invalidate);
-  const unlit = luminance(finish) < 150 ? "#ececee" : "#2a2a2e";
+  const dark = cutoutColor(finish);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     litRef.current = lit;
-  }, [lit]);
+    invalidate();
+  }, [invalidate, lit]);
+
+  useEffect(() => {
+    let alive = true;
+    void loadLogoMaps().then((next) => {
+      if (!alive) return;
+      setMaps(next);
+      invalidate();
+    });
+    return () => {
+      alive = false;
+    };
+  }, [invalidate]);
 
   useFrame((_, delta) => {
     const target = litRef.current ? 1 : 0;
-    const next = glow.current + (target - glow.current) * (1 - Math.exp(-3.1 * delta));
+    const next = amount.current + (target - amount.current) * (1 - Math.exp(-3.1 * delta));
     const settled = Math.abs(target - next) < 0.004;
-    glow.current = settled ? target : next;
-    const amount = glow.current;
-    const rest = new THREE.Color(unlit);
-    const hot = new THREE.Color("#ffffff");
-    if (mark.current) {
-      mark.current.color.copy(rest).lerp(hot, amount);
-      mark.current.opacity = 0.92;
-    }
-    if (halo.current) halo.current.opacity = amount * 0.95;
+    amount.current = settled ? target : next;
+    const level = amount.current;
+    if (cutout.current) cutout.current.opacity = 1 - level * 0.92;
+    if (glow.current) glow.current.opacity = level;
+    if (bloom.current) bloom.current.opacity = level;
     if (!settled) invalidate();
   });
 
-  if (!textures) return null;
+  if (!maps) return null;
+  const width = size * maps.aspect;
+  const height = size;
 
   return (
     <group position={position} rotation={rotation}>
       <mesh renderOrder={2}>
-        <planeGeometry args={[size * 2.6, size * 2.6]} />
+        <planeGeometry args={[width, height]} />
         <meshBasicMaterial
-          ref={halo}
-          map={textures.halo}
+          ref={cutout}
+          map={maps.mask}
+          color={dark}
           transparent
           depthWrite={false}
-          opacity={0}
+          opacity={lit ? 0.08 : 1}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0, 0, 0.001]} renderOrder={3}>
+        <planeGeometry args={[width * BLOOM_SCALE, height * BLOOM_SCALE]} />
+        <meshBasicMaterial
+          ref={bloom}
+          map={maps.bloom}
+          color="#ffffff"
+          transparent
+          depthWrite={false}
+          opacity={lit ? 1 : 0}
           blending={THREE.AdditiveBlending}
           toneMapped={false}
         />
       </mesh>
-      <mesh position={[0, 0, 0.002]} renderOrder={3}>
-        <planeGeometry args={[size, size]} />
+      <mesh position={[0, 0, 0.002]} renderOrder={4}>
+        <planeGeometry args={[width, height]} />
         <meshBasicMaterial
-          ref={mark}
-          map={textures.apple}
-          color={unlit}
+          ref={glow}
+          map={maps.mask}
+          color="#ffffff"
           transparent
           depthWrite={false}
+          opacity={lit ? 1 : 0}
+          blending={THREE.AdditiveBlending}
           toneMapped={false}
         />
       </mesh>
