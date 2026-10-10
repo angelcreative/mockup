@@ -1,60 +1,97 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, type MutableRefObject } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, ScreenState } from "@/lib/devices";
-import { BACKGROUNDS } from "@/lib/devices";
-import { DeviceModel, deviceBodyHeight } from "@/components/devices";
+import { BACKGROUNDS, liveViewport } from "@/lib/devices";
+import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
+import { paintScreen } from "@/components/chrome";
+import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 
-function createStatusTexture(status: ScreenState["status"], message: string) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 804;
-  canvas.height = 1748;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    const fallback = new THREE.CanvasTexture(canvas);
-    fallback.colorSpace = THREE.SRGBColorSpace;
-    return fallback;
-  }
+export type ScreenInput =
+  | { action: "move" | "down" | "up"; x: number; y: number; button: number }
+  | { action: "wheel"; x: number; y: number; button: number; deltaX: number; deltaY: number };
 
-  context.fillStyle = "#f3f3f3";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = status === "error" ? "#9f1239" : "#5c5c5c";
-  const family = getComputedStyle(document.body).fontFamily || "Inter, sans-serif";
-  context.font = `500 46px ${family}`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-
-  const words = message.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let line = "";
-  const maxWidth = 640;
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (context.measureText(next).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
-    }
-  }
-  if (line) lines.push(line);
-
-  const anchor = status === "loading" ? canvas.height * 0.58 : canvas.height * 0.5;
-  const lineHeight = 64;
-  const start = anchor - ((lines.length - 1) * lineHeight) / 2;
-  lines.forEach((value, index) => {
-    context.fillText(value, canvas.width / 2, start + index * lineHeight);
-  });
-
+function makeCanvasTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
-  texture.needsUpdate = true;
   return texture;
+}
+
+function copyPanel(source: HTMLCanvasElement, target: HTMLCanvasElement, mode: "full" | "left" | "right") {
+  const sw = mode === "full" ? source.width : Math.max(1, Math.floor(source.width / 2));
+  const sx = mode === "right" ? source.width - sw : 0;
+  if (target.width !== sw) target.width = sw;
+  if (target.height !== source.height) target.height = source.height;
+  const context = target.getContext("2d");
+  if (!context) return;
+  context.drawImage(source, sx, 0, sw, source.height, 0, 0, sw, source.height);
+}
+
+function useDeviceTexture(
+  device: DeviceSpec,
+  frame: ImageBitmap | null,
+  status: ScreenState["status"],
+  message: string,
+  clock: number,
+  apertura: number,
+) {
+  const canvas = useState(() => document.createElement("canvas"))[0];
+  const leftCanvas = useState(() => document.createElement("canvas"))[0];
+  const rightCanvas = useState(() => document.createElement("canvas"))[0];
+  const texture = useMemo(() => makeCanvasTexture(canvas), [canvas]);
+  const leftTexture = useMemo(() => makeCanvasTexture(leftCanvas), [leftCanvas]);
+  const rightTexture = useMemo(() => makeCanvasTexture(rightCanvas), [rightCanvas]);
+
+  useLayoutEffect(() => {
+    const viewport = liveViewport(device, apertura);
+    paintScreen(
+      canvas,
+      device,
+      frame,
+      frame?.width || viewport.width,
+      frame?.height || viewport.height,
+      status,
+      message,
+    );
+    const wide = canvas.width / Math.max(1, canvas.height) > 0.62;
+    copyPanel(canvas, leftCanvas, wide ? "left" : "full");
+    copyPanel(canvas, rightCanvas, wide ? "right" : "full");
+    // Three.js uploads a canvas only when this flag is set, after the pixels are painted.
+    /* eslint-disable react-hooks/immutability */
+    texture.needsUpdate = true;
+    leftTexture.needsUpdate = true;
+    rightTexture.needsUpdate = true;
+    /* eslint-enable react-hooks/immutability */
+  }, [
+    apertura,
+    canvas,
+    clock,
+    device,
+    frame,
+    leftCanvas,
+    leftTexture,
+    message,
+    rightCanvas,
+    rightTexture,
+    status,
+    texture,
+  ]);
+
+  useEffect(
+    () => () => {
+      texture.dispose();
+      leftTexture.dispose();
+      rightTexture.dispose();
+    },
+    [leftTexture, rightTexture, texture],
+  );
+
+  return { texture, leftTexture, rightTexture };
 }
 
 function createGradientTexture() {
@@ -92,7 +129,7 @@ function SceneBackground({ background }: { background: BackgroundId }) {
   return <color attach="background" args={[color]} />;
 }
 
-function SoftShadow({ y, strength }: { y: number; strength: number }) {
+function SoftShadow({ y, strength, width }: { y: number; strength: number; width: number }) {
   const texture = useMemo(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 512;
@@ -115,7 +152,7 @@ function SoftShadow({ y, strength }: { y: number; strength: number }) {
 
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0.05]}>
-      <planeGeometry args={[3.4, 1.5]} />
+      <planeGeometry args={[Math.max(3.2, width), 1.55]} />
       <meshBasicMaterial
         map={texture}
         transparent
@@ -153,51 +190,254 @@ function ExportBridge({
   return null;
 }
 
+function FrameCamera({ span }: { span: number }) {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls) as
+    | { target: THREE.Vector3; update: () => void }
+    | null;
+
+  useEffect(() => {
+    const distance = Math.max(12.2, span * 2.35);
+    camera.position.set(distance * 0.08, 0.16, distance);
+    camera.lookAt(0, 0, 0);
+    if (controls) {
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+  }, [camera, controls, span]);
+
+  return null;
+}
+
+function readHit(object: THREE.Object3D) {
+  const data = object.userData as {
+    screen?: boolean;
+    panel?: ScreenPanel;
+    screenWidth?: number;
+    screenHeight?: number;
+    topInset?: number;
+    bottomInset?: number;
+  };
+  if (!data.screen || !data.panel) return null;
+  if (
+    typeof data.screenWidth !== "number" ||
+    typeof data.screenHeight !== "number" ||
+    typeof data.topInset !== "number" ||
+    typeof data.bottomInset !== "number"
+  ) {
+    return null;
+  }
+  return data;
+}
+
+function ScreenPointer({
+  viewportWidth,
+  viewportHeight,
+  onInput,
+}: {
+  viewportWidth: number;
+  viewportHeight: number;
+  onInput: (input: ScreenInput) => void;
+}) {
+  const { camera, gl, scene, controls } = useThree();
+  const onInputRef = useRef(onInput);
+  const sizeRef = useRef({ viewportWidth, viewportHeight });
+
+  useEffect(() => {
+    onInputRef.current = onInput;
+    sizeRef.current = { viewportWidth, viewportHeight };
+  });
+
+  useEffect(() => {
+    const dom = gl.domElement;
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let dragging = false;
+    let hoverFrame = 0;
+
+    const orbit = () => controls as { enabled?: boolean } | null;
+
+    function pick(event: PointerEvent | WheelEvent) {
+      const rect = dom.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const targets: THREE.Object3D[] = [];
+      scene.traverse((object) => {
+        if (object.userData?.screen) targets.push(object);
+      });
+      const hit = raycaster.intersectObjects(targets, false)[0];
+      if (!hit?.uv || !hit.object) return null;
+      const data = readHit(hit.object);
+      if (!data || !data.panel) return null;
+      const css = uvToCss(
+        {
+          u: hit.uv.x,
+          v: hit.uv.y,
+          panel: data.panel,
+          screenWidth: data.screenWidth ?? 0,
+          screenHeight: data.screenHeight ?? 0,
+          topInset: data.topInset ?? 0,
+          bottomInset: data.bottomInset ?? 0,
+        },
+        sizeRef.current.viewportWidth,
+        sizeRef.current.viewportHeight,
+      );
+      return { css, onGlass: true as const };
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      const hit = pick(event);
+      if (!hit) return;
+      const current = orbit();
+      if (current) current.enabled = false;
+      dragging = true;
+      if (!hit.css) return;
+      onInputRef.current({
+        action: "down",
+        x: hit.css.x,
+        y: hit.css.y,
+        button: event.button,
+      });
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (event.buttons > 0 && !dragging) return;
+      const hit = pick(event);
+      if (!hit) {
+        if (!dragging) {
+          const current = orbit();
+          if (current) current.enabled = true;
+        }
+        return;
+      }
+      if (!dragging) {
+        const current = orbit();
+        if (current) current.enabled = false;
+      }
+      if (!hit.css) return;
+      if (!dragging) {
+        const now = performance.now();
+        if (now - hoverFrame < 32) return;
+        hoverFrame = now;
+      }
+      onInputRef.current({
+        action: "move",
+        x: hit.css.x,
+        y: hit.css.y,
+        button: event.button,
+      });
+    }
+
+    function onPointerUp(event: PointerEvent) {
+      const hit = pick(event);
+      if (dragging && hit?.css) {
+        onInputRef.current({
+          action: "up",
+          x: hit.css.x,
+          y: hit.css.y,
+          button: event.button,
+        });
+      }
+      dragging = false;
+      const current = orbit();
+      if (current) current.enabled = true;
+    }
+
+    function onWheel(event: WheelEvent) {
+      const hit = pick(event);
+      if (!hit) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!hit.css) return;
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1;
+      onInputRef.current({
+        action: "wheel",
+        x: hit.css.x,
+        y: hit.css.y,
+        button: 0,
+        deltaX: event.deltaX * scale,
+        deltaY: event.deltaY * scale,
+      });
+    }
+
+    dom.addEventListener("pointerdown", onPointerDown, true);
+    dom.addEventListener("pointermove", onPointerMove, true);
+    dom.addEventListener("pointerup", onPointerUp, true);
+    dom.addEventListener("pointercancel", onPointerUp, true);
+    dom.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    return () => {
+      dom.removeEventListener("pointerdown", onPointerDown, true);
+      dom.removeEventListener("pointermove", onPointerMove, true);
+      dom.removeEventListener("pointerup", onPointerUp, true);
+      dom.removeEventListener("pointercancel", onPointerUp, true);
+      dom.removeEventListener("wheel", onWheel, true);
+    };
+  }, [camera, controls, gl, scene]);
+
+  return null;
+}
+
 function Stage({
   device,
   screen,
+  frame,
   apertura,
   light,
   background,
   exportRef,
+  onInput,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
+  frame: ImageBitmap | null;
   apertura: number;
   light: number;
   background: BackgroundId;
   exportRef: MutableRefObject<(() => void) | null>;
+  onInput: (input: ScreenInput) => void;
 }) {
-  const texture = useMemo(() => {
-    if (screen.status === "ready" && screen.image) {
-      const next = new THREE.Texture(screen.image);
-      next.colorSpace = THREE.SRGBColorSpace;
-      next.anisotropy = 8;
-      next.needsUpdate = true;
-      return next;
-    }
-    return createStatusTexture(screen.status, screen.message);
-  }, [screen.image, screen.message, screen.status]);
+  const [clock, setClock] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setClock(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
-  useEffect(() => () => texture.dispose(), [texture]);
-
-  const bodyH = deviceBodyHeight(device);
+  const { texture, leftTexture, rightTexture } = useDeviceTexture(
+    device,
+    frame,
+    screen.status,
+    screen.message,
+    clock,
+    apertura,
+  );
+  const viewport = liveViewport(device, apertura);
+  const frameWide = frame ? frame.width / Math.max(1, frame.height) > 0.62 : false;
+  const span = deviceSpan(device, apertura);
+  const foot = deviceFoot(device);
 
   return (
     <>
       <SceneBackground background={background} />
       <ExportBridge exportRef={exportRef} />
+      <FrameCamera span={span} />
       <ambientLight intensity={0.55 * light} />
       <directionalLight position={[3.4, 5.2, 4.2]} intensity={1.25 * light} />
       <directionalLight position={[-3.2, 2.4, 2.2]} intensity={0.38 * light} />
       <DeviceModel
         device={device}
         texture={texture}
-        image={screen.status === "ready" ? screen.image : null}
+        leftTexture={leftTexture}
+        rightTexture={rightTexture}
         status={screen.status}
         apertura={apertura}
       />
-      <SoftShadow y={-bodyH / 2 - 0.012} strength={0.9 * Math.min(Math.max(light, 0), 1.3)} />
+      <SoftShadow
+        y={-foot / 2 - 0.012}
+        strength={0.9 * Math.min(Math.max(light, 0), 1.3)}
+        width={device.id === "fold" && frameWide ? 5.4 : 3.6}
+      />
       <OrbitControls
         makeDefault
         enablePan={false}
@@ -208,6 +448,11 @@ function Stage({
         minPolarAngle={Math.PI / 8}
         maxPolarAngle={Math.PI * 0.82}
       />
+      <ScreenPointer
+        viewportWidth={viewport.width}
+        viewportHeight={viewport.height}
+        onInput={onInput}
+      />
     </>
   );
 }
@@ -215,17 +460,21 @@ function Stage({
 export default function Scene({
   device,
   screen,
+  frame,
   apertura,
   light,
   background,
   exportRef,
+  onInput,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
+  frame: ImageBitmap | null;
   apertura: number;
   light: number;
   background: BackgroundId;
   exportRef: MutableRefObject<(() => void) | null>;
+  onInput: (input: ScreenInput) => void;
 }) {
   return (
     <Canvas
@@ -246,10 +495,12 @@ export default function Scene({
         <Stage
           device={device}
           screen={screen}
+          frame={frame}
           apertura={apertura}
           light={light}
           background={background}
           exportRef={exportRef}
+          onInput={onInput}
         />
       </Suspense>
     </Canvas>

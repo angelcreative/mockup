@@ -5,33 +5,26 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { DeviceSpec, ScreenStatus } from "@/lib/devices";
-import { frameSize, roundedBodyGeometry, roundedRectGeometry } from "@/components/geometry";
+import { FOLD_PANEL_WIDTH, ISLAND_POINTS, NOTCH_POINTS, isFoldOpen } from "@/lib/devices";
+import {
+  frameSize,
+  roundedBodyGeometry,
+  roundedRectGeometry,
+  topNotchGeometry,
+} from "@/components/geometry";
 
 const FINISH = {
   midnight: { color: "#16161a", metalness: 0.42, roughness: 0.46 },
   black: { color: "#1c1c1f", metalness: 0.4, roughness: 0.48 },
   graphite: { color: "#2a2c31", metalness: 0.48, roughness: 0.42 },
   titanium: { color: "#8d8a83", metalness: 0.62, roughness: 0.36 },
+  silver: { color: "#d7d7dc", metalness: 0.58, roughness: 0.32 },
+  starlight: { color: "#e4dccd", metalness: 0.46, roughness: 0.4 },
 } as const;
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
   useEffect(() => () => geometry.dispose(), [geometry]);
   return geometry;
-}
-
-function coverMap(source: THREE.Texture, imageAspect: number, targetAspect: number) {
-  const map = source.clone();
-  if (imageAspect > targetAspect) {
-    const repeatX = targetAspect / imageAspect;
-    map.repeat.set(repeatX, 1);
-    map.offset.set((1 - repeatX) / 2, 0);
-  } else {
-    const repeatY = imageAspect / targetAspect;
-    map.repeat.set(1, repeatY);
-    map.offset.set(0, (1 - repeatY) / 2);
-  }
-  map.needsUpdate = true;
-  return map;
 }
 
 function ScreenSpinner({ position }: { position: [number, number, number] }) {
@@ -51,23 +44,27 @@ function ScreenSpinner({ position }: { position: [number, number, number] }) {
 function SideButtons({
   bodyW,
   color,
-  side = "both",
+  side,
 }: {
   bodyW: number;
   color: string;
-  side?: "both" | "left";
+  side: "both" | "left" | "right";
 }) {
   return (
     <group>
-      <mesh position={[-bodyW / 2 - 0.012, 0.62, 0]}>
-        <boxGeometry args={[0.022, 0.2, 0.048]} />
-        <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
-      </mesh>
-      <mesh position={[-bodyW / 2 - 0.012, 0.26, 0]}>
-        <boxGeometry args={[0.022, 0.34, 0.048]} />
-        <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
-      </mesh>
-      {side === "both" ? (
+      {side !== "right" ? (
+        <>
+          <mesh position={[-bodyW / 2 - 0.012, 0.62, 0]}>
+            <boxGeometry args={[0.022, 0.2, 0.048]} />
+            <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
+          </mesh>
+          <mesh position={[-bodyW / 2 - 0.012, 0.26, 0]}>
+            <boxGeometry args={[0.022, 0.34, 0.048]} />
+            <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
+          </mesh>
+        </>
+      ) : null}
+      {side !== "left" ? (
         <mesh position={[bodyW / 2 + 0.012, 0.38, 0]}>
           <boxGeometry args={[0.022, 0.5, 0.048]} />
           <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
@@ -77,20 +74,71 @@ function SideButtons({
   );
 }
 
-function PhoneMesh({
+function FrontCamera({
+  edge,
+  bodyW,
+  bodyH,
+  bezel,
+  depth,
+}: {
+  edge: "top" | "right";
+  bodyW: number;
+  bodyH: number;
+  bezel: number;
+  depth: number;
+}) {
+  const radius = Math.min(0.042, Math.max(0.03, bezel * 0.5));
+  const position: [number, number, number] =
+    edge === "top"
+      ? [0, bodyH / 2 - bezel * 0.48, depth / 2 + 0.008]
+      : [bodyW / 2 - bezel * 0.48, 0, depth / 2 + 0.008];
+
+  return (
+    <group position={position}>
+      <mesh>
+        <circleGeometry args={[radius, 28]} />
+        <meshStandardMaterial color="#121316" metalness={0.45} roughness={0.32} />
+      </mesh>
+      <mesh position={[0, 0, 0.004]}>
+        <circleGeometry args={[radius * 0.52, 24]} />
+        <meshStandardMaterial color="#050506" metalness={0.7} roughness={0.18} />
+      </mesh>
+      <mesh position={[radius * 0.18, radius * 0.18, 0.008]}>
+        <circleGeometry args={[radius * 0.12, 12]} />
+        <meshBasicMaterial color="#9fd0ff" />
+      </mesh>
+    </group>
+  );
+}
+
+function screenUserData(
+  device: DeviceSpec,
+  panel: "single" | "left" | "right",
+  screenWidth: number,
+) {
+  return {
+    screen: true,
+    panel,
+    screenWidth,
+    screenHeight: device.height,
+    topInset: device.topInset,
+    bottomInset: device.bottomInset,
+  };
+}
+
+function Slab({
   device,
   texture,
-  image,
   status,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
-  image: HTMLImageElement | null;
   status: ScreenStatus;
 }) {
+  const profile = device.kind === "tablet" ? "tablet" : "phone";
   const frame = useMemo(
-    () => frameSize(device.width, device.height),
-    [device.width, device.height],
+    () => frameSize(device.width, device.height, profile),
+    [device.width, device.height, profile],
   );
   const body = useDisposable(
     useMemo(
@@ -104,41 +152,33 @@ function PhoneMesh({
         roundedRectGeometry(
           frame.screenW,
           frame.screenH,
-          Math.max(0.08, frame.radius - 0.08),
+          Math.max(0.06, frame.radius - (profile === "tablet" ? 0.02 : 0.08)),
         ),
-      [frame.screenW, frame.screenH, frame.radius],
+      [frame.screenW, frame.screenH, frame.radius, profile],
     ),
-  );
-  const notch = useDisposable(
-    useMemo(() => {
-      const width = frame.screenW * 0.48;
-      const height = frame.screenH * 0.034;
-      return roundedRectGeometry(width, height, height * 0.42);
-    }, [frame.screenW, frame.screenH]),
   );
   const island = useDisposable(
     useMemo(() => {
-      const width = frame.screenW * 0.34;
-      const height = frame.screenH * 0.031;
+      const width = frame.screenW * (ISLAND_POINTS.width / device.width);
+      const height = frame.screenH * (ISLAND_POINTS.height / device.height);
       return roundedRectGeometry(width, height, height / 2);
-    }, [frame.screenW, frame.screenH]),
+    }, [frame.screenW, frame.screenH, device.width, device.height]),
   );
-  const home = useDisposable(
-    useMemo(() => roundedRectGeometry(frame.screenW * 0.34, 0.02, 0.01), [frame.screenW]),
+  const notch = useDisposable(
+    useMemo(() => {
+      const width = frame.screenW * (NOTCH_POINTS.width / device.width);
+      const height = frame.screenH * (NOTCH_POINTS.height / device.height);
+      return topNotchGeometry(width, height, height * 0.42);
+    }, [frame.screenW, frame.screenH, device.width, device.height]),
   );
-  const fitted = useMemo(() => {
-    if (!image) return texture;
-    return coverMap(texture, image.width / Math.max(1, image.height), device.width / device.height);
-  }, [texture, image, device.width, device.height]);
-
-  useEffect(() => {
-    if (fitted !== texture) return () => fitted.dispose();
-  }, [fitted, texture]);
 
   const finish = FINISH[device.finish];
   const zFront = frame.depth / 2 + 0.01;
-  const notchH = frame.screenH * 0.034;
-  const islandH = frame.screenH * 0.031;
+  const islandH = frame.screenH * (ISLAND_POINTS.height / device.height);
+  const islandY =
+    frame.screenH / 2 - frame.screenH * (ISLAND_POINTS.top / device.height) - islandH / 2;
+  const notchH = frame.screenH * (NOTCH_POINTS.height / device.height);
+  const notchY = frame.screenH / 2 - notchH / 2;
 
   return (
     <group>
@@ -149,44 +189,125 @@ function PhoneMesh({
           roughness={finish.roughness}
         />
       </mesh>
-      <mesh geometry={screen} position={[0, 0, zFront]}>
-        <meshBasicMaterial map={fitted} toneMapped={false} />
+      <mesh
+        geometry={screen}
+        position={[0, 0, zFront]}
+        userData={screenUserData(device, "single", device.width)}
+      >
+        <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
-      {device.cutout === "notch" ? (
-        <mesh geometry={notch} position={[0, frame.screenH / 2 - notchH * 0.22, zFront + 0.008]}>
-          <meshBasicMaterial color="#050505" />
-        </mesh>
-      ) : null}
       {device.cutout === "island" ? (
-        <mesh
-          geometry={island}
-          position={[0, frame.screenH / 2 - islandH - frame.screenH * 0.016, zFront + 0.008]}
-        >
+        <mesh geometry={island} position={[0, islandY, zFront + 0.008]}>
           <meshBasicMaterial color="#050505" />
         </mesh>
       ) : null}
-      <mesh geometry={home} position={[0, -frame.screenH / 2 + 0.1, zFront + 0.008]}>
-        <meshBasicMaterial color="#050505" transparent opacity={0.55} />
+      {device.cutout === "notch" ? (
+        <mesh geometry={notch} position={[0, notchY, zFront + 0.008]}>
+          <meshBasicMaterial color="#050505" />
+        </mesh>
+      ) : null}
+      {device.camera === "none" ? null : (
+        <FrontCamera
+          edge={device.camera}
+          bodyW={frame.bodyW}
+          bodyH={frame.bodyH}
+          bezel={frame.bezel}
+          depth={frame.depth}
+        />
+      )}
+      {device.kind === "tablet" ? (
+        <mesh position={[frame.bodyW / 2 + 0.01, 0.55, 0]}>
+          <boxGeometry args={[0.016, 0.28, 0.03]} />
+          <meshStandardMaterial color={finish.color} metalness={0.55} roughness={0.38} />
+        </mesh>
+      ) : (
+        <SideButtons bodyW={frame.bodyW} color={finish.color} side="both" />
+      )}
+      {status === "loading" ? <ScreenSpinner position={[0, 0.15, zFront + 0.02]} /> : null}
+    </group>
+  );
+}
+
+function FoldPanel({
+  texture,
+  panel,
+  body,
+  screen,
+  depth,
+  bodyW,
+  buttons,
+  status,
+  interactive,
+}: {
+  texture: THREE.Texture;
+  panel: "left" | "right";
+  body: THREE.BufferGeometry;
+  screen: THREE.BufferGeometry;
+  depth: number;
+  bodyW: number;
+  buttons: "left" | "right" | "both";
+  status: ScreenStatus;
+  interactive: boolean;
+}) {
+
+  const finish = FINISH.black;
+  const zFront = depth / 2 + 0.01;
+
+  return (
+    <group>
+      <mesh geometry={body}>
+        <meshStandardMaterial
+          color={finish.color}
+          metalness={finish.metalness}
+          roughness={finish.roughness}
+        />
       </mesh>
-      <SideButtons bodyW={frame.bodyW} color={finish.color} />
-      {status === "loading" ? <ScreenSpinner position={[0, 0.78, zFront + 0.02]} /> : null}
+      <mesh
+        geometry={screen}
+        position={[0, 0, zFront]}
+        userData={{
+          ...screenUserData(
+            {
+              id: "fold",
+              label: "Fold",
+              width: 768,
+              height: 874,
+              cutout: "none",
+              finish: "black",
+              kind: "fold",
+              topInset: 0,
+              bottomInset: 0,
+              camera: "none",
+            },
+            panel,
+            FOLD_PANEL_WIDTH,
+          ),
+          screen: interactive,
+        }}
+      >
+        <meshBasicMaterial map={texture} toneMapped={false} />
+      </mesh>
+      <SideButtons bodyW={bodyW} color={finish.color} side={buttons} />
+      {status === "loading" && panel === "left" ? (
+        <ScreenSpinner position={[0, 0.15, zFront + 0.02]} />
+      ) : null}
     </group>
   );
 }
 
 function FoldMesh({
-  texture,
-  image,
+  leftTexture,
+  rightTexture,
   status,
   apertura,
 }: {
-  texture: THREE.Texture;
-  image: HTMLImageElement | null;
+  leftTexture: THREE.Texture;
+  rightTexture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
 }) {
-  const frame = useMemo(() => frameSize(384, 874), []);
-  const depth = frame.depth * 0.78;
+  const frame = useMemo(() => frameSize(FOLD_PANEL_WIDTH, 874), []);
+  const depth = frame.depth * 0.72;
   const body = useDisposable(
     useMemo(
       () => roundedBodyGeometry(frame.bodyW, frame.bodyH, depth, frame.radius * 0.92),
@@ -204,87 +325,46 @@ function FoldMesh({
       [frame.screenW, frame.screenH, frame.radius],
     ),
   );
-  const maps = useMemo(() => {
-    if (!image) return { left: texture, right: texture, cloned: false };
-    const target = 768 / 874;
-    const imageAspect = image.width / Math.max(1, image.height);
-    const left = texture.clone();
-    const right = texture.clone();
-    if (imageAspect > target) {
-      const visible = target / imageAspect;
-      const start = (1 - visible) / 2;
-      left.repeat.set(visible / 2, 1);
-      left.offset.set(start, 0);
-      right.repeat.set(visible / 2, 1);
-      right.offset.set(start + visible / 2, 0);
-    } else {
-      const visibleY = imageAspect / target;
-      const y = (1 - visibleY) / 2;
-      left.repeat.set(0.5, visibleY);
-      left.offset.set(0, y);
-      right.repeat.set(0.5, visibleY);
-      right.offset.set(0.5, y);
-    }
-    left.needsUpdate = true;
-    right.needsUpdate = true;
-    return { left, right, cloned: true };
-  }, [texture, image]);
 
-  useEffect(() => {
-    if (!maps.cloned) return;
-    return () => {
-      maps.left.dispose();
-      maps.right.dispose();
-    };
-  }, [maps]);
-
-  const finish = FINISH.black;
-  const zFront = depth / 2 + 0.01;
-  const closed = 1 - apertura;
-  const shift = -frame.bodyW / 2 - (apertura * frame.bodyW) / 2;
+  const open = isFoldOpen(apertura);
+  const gap = 0.11 * apertura;
+  const centerShift = ((frame.bodyW + gap) / 2) * (1 - apertura);
+  const leftButtons = open ? "left" : "both";
 
   return (
-    <group position={[shift, 0, 0]}>
-      <group position={[frame.bodyW / 2, 0, 0]}>
-        <mesh geometry={body}>
-          <meshStandardMaterial
-            color={finish.color}
-            metalness={finish.metalness}
-            roughness={finish.roughness}
-          />
-        </mesh>
-        <mesh geometry={screen} position={[0, 0, zFront]}>
-          <meshBasicMaterial map={maps.left} toneMapped={false} />
-        </mesh>
-        <SideButtons bodyW={frame.bodyW} color={finish.color} side="left" />
-        {apertura < 0.18 ? (
-          <mesh position={[frame.bodyW / 2 + 0.012, 0.38, 0]}>
-            <boxGeometry args={[0.022, 0.5, 0.048]} />
-            <meshStandardMaterial color={finish.color} metalness={0.55} roughness={0.38} />
-          </mesh>
-        ) : null}
-        {status === "loading" ? <ScreenSpinner position={[0, 0.78, zFront + 0.02]} /> : null}
+    <group position={[centerShift, 0, 0]}>
+      <mesh visible={apertura > 0.05} position={[0, 0, 0.02]}>
+        <cylinderGeometry args={[0.048, 0.048, frame.bodyH * 0.97, 24]} />
+        <meshStandardMaterial color="#0c0c0e" metalness={0.74} roughness={0.28} />
+      </mesh>
+      <group position={[-frame.bodyW / 2 - gap / 2, 0, 0]}>
+        <FoldPanel
+          texture={leftTexture}
+          panel="left"
+          body={body}
+          screen={screen}
+          depth={depth}
+          bodyW={frame.bodyW}
+          buttons={leftButtons}
+          status={status}
+          interactive
+        />
       </group>
-
-      <group position={[frame.bodyW, 0, -depth * closed]} rotation={[0, closed * Math.PI, 0]}>
-        <group position={[frame.bodyW / 2, 0, 0]}>
-          <mesh geometry={body}>
-            <meshStandardMaterial
-              color={finish.color}
-              metalness={finish.metalness}
-              roughness={finish.roughness}
-            />
-          </mesh>
-          <mesh geometry={screen} position={[0, 0, zFront]}>
-            <meshBasicMaterial map={maps.right} toneMapped={false} />
-          </mesh>
+      <group rotation={[0, (1 - apertura) * Math.PI, 0]}>
+        <group position={[frame.bodyW / 2 + gap / 2, 0, depth * 1.25 * (1 - apertura)]}>
+          <FoldPanel
+            texture={rightTexture}
+            panel="right"
+            body={body}
+            screen={screen}
+            depth={depth}
+            bodyW={frame.bodyW}
+            buttons="right"
+            status={status}
+            interactive={apertura > 0.08}
+          />
         </group>
       </group>
-
-      <mesh position={[frame.bodyW, 0, 0]} visible={apertura > 0.08}>
-        <cylinderGeometry args={[depth * 0.34, depth * 0.34, frame.bodyH * 0.985, 24]} />
-        <meshStandardMaterial color="#121214" metalness={0.72} roughness={0.32} />
-      </mesh>
     </group>
   );
 }
@@ -292,26 +372,42 @@ function FoldMesh({
 export function DeviceModel({
   device,
   texture,
-  image,
+  leftTexture,
+  rightTexture,
   status,
   apertura,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
-  image: HTMLImageElement | null;
+  leftTexture: THREE.Texture;
+  rightTexture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
 }) {
   if (device.id === "fold") {
     return (
-      <FoldMesh texture={texture} image={image} status={status} apertura={apertura} />
+      <FoldMesh
+        leftTexture={leftTexture}
+        rightTexture={rightTexture}
+        status={status}
+        apertura={apertura}
+      />
     );
   }
-
-  return <PhoneMesh device={device} texture={texture} image={image} status={status} />;
+  return <Slab device={device} texture={texture} status={status} />;
 }
 
-export function deviceBodyHeight(device: DeviceSpec) {
-  if (device.id === "fold") return frameSize(384, 874).bodyH;
-  return frameSize(device.width, device.height).bodyH;
+export function deviceSpan(device: DeviceSpec, apertura: number) {
+  if (device.id === "fold") {
+    const frame = frameSize(FOLD_PANEL_WIDTH, 874);
+    return isFoldOpen(apertura) ? frame.bodyW * 2 + 0.2 : frame.bodyW;
+  }
+  const profile = device.kind === "tablet" ? "tablet" : "phone";
+  return frameSize(device.width, device.height, profile).bodyH;
+}
+
+export function deviceFoot(device: DeviceSpec) {
+  if (device.id === "fold") return frameSize(FOLD_PANEL_WIDTH, 874).bodyH;
+  const profile = device.kind === "tablet" ? "tablet" : "phone";
+  return frameSize(device.width, device.height, profile).bodyH;
 }

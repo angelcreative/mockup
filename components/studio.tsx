@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 
 import { Button } from "@/components/ui/button";
@@ -13,15 +13,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import type { ScreenInput } from "@/components/scene";
 import {
   BACKGROUNDS,
   DEVICES,
   deviceById,
   isDeviceId,
+  liveViewport,
   type BackgroundId,
   type DeviceId,
   type ScreenState,
 } from "@/lib/devices";
+import type { LiveServerMessage } from "@/lib/live-protocol";
 import { normalizeHttpUrl } from "@/lib/url";
 
 const Scene = dynamic(() => import("@/components/scene"), {
@@ -31,24 +34,12 @@ const Scene = dynamic(() => import("@/components/scene"), {
 
 const EMPTY_SCREEN: ScreenState = {
   status: "empty",
-  message: "Pega una URL para capturar el sitio",
-  image: null,
+  message: "Pega una URL para abrir el sitio",
 };
 
-function loadImage(blob: Blob) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("imagen"));
-    };
-    image.src = url;
-  });
+function socketUrl() {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/live`;
 }
 
 export function Studio() {
@@ -58,12 +49,122 @@ export function Studio() {
   const [light, setLight] = useState(1);
   const [apertura, setApertura] = useState(0);
   const [screen, setScreen] = useState<ScreenState>(EMPTY_SCREEN);
+  const [frame, setFrame] = useState<ImageBitmap | null>(null);
   const exportRef = useRef<(() => void) | null>(null);
-  const requestId = useRef(0);
+  const socketRef = useRef<WebSocket | null>(null);
+  const openedRef = useRef("");
+  const sentSize = useRef("");
   const device = deviceById(deviceId);
+  const viewport = liveViewport(device, apertura);
   const loading = screen.status === "loading";
 
-  async function capture(event: FormEvent) {
+  function rememberFrame(next: ImageBitmap | null) {
+    setFrame((current) => {
+      if (current && current !== next) {
+        const stale = current;
+        requestAnimationFrame(() => requestAnimationFrame(() => stale.close()));
+      }
+      return next;
+    });
+  }
+
+  function closeSocket() {
+    const socket = socketRef.current;
+    socketRef.current = null;
+    openedRef.current = "";
+    sentSize.current = "";
+    socket?.close();
+  }
+
+  useEffect(() => {
+    const ping = window.setInterval(() => {
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 45_000);
+    return () => {
+      window.clearInterval(ping);
+      socketRef.current?.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
+    const key = `${viewport.width}x${viewport.height}`;
+    if (sentSize.current === key) return;
+    sentSize.current = key;
+    socket.send(JSON.stringify({ type: "resize", width: viewport.width, height: viewport.height }));
+  }, [viewport.width, viewport.height]);
+
+  function sendInput(input: ScreenInput) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
+    socket.send(JSON.stringify({ type: "input", ...input }));
+  }
+
+  function attachSocket(target: string, width: number, height: number) {
+    closeSocket();
+    const socket = new WebSocket(socketUrl());
+    socket.binaryType = "arraybuffer";
+    socketRef.current = socket;
+    const key = `${width}x${height}`;
+
+    socket.onopen = () => {
+      if (socketRef.current !== socket) return;
+      openedRef.current = target;
+      sentSize.current = key;
+      socket.send(JSON.stringify({ type: "open", url: target, width, height }));
+    };
+
+    socket.onmessage = (event) => {
+      if (socketRef.current !== socket) return;
+      if (typeof event.data === "string") {
+        let message: LiveServerMessage;
+        try {
+          message = JSON.parse(event.data) as LiveServerMessage;
+        } catch {
+          return;
+        }
+        if (message.type === "error") {
+          setScreen({ status: "error", message: message.message });
+        } else if (message.type === "idle") {
+          setScreen({ status: "error", message: "La sesión se cerró por inactividad" });
+          rememberFrame(null);
+        } else if (message.type === "status" && message.state === "loading") {
+          setScreen({ status: "loading", message: "Abriendo…" });
+        }
+        return;
+      }
+      const bytes = event.data as ArrayBuffer;
+      createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
+        .then((bitmap) => {
+          if (socketRef.current !== socket) {
+            bitmap.close();
+            return;
+          }
+          rememberFrame(bitmap);
+          setScreen({ status: "ready", message: "" });
+        })
+        .catch(() => undefined);
+    };
+
+    socket.onclose = () => {
+      if (socketRef.current !== socket) return;
+      socketRef.current = null;
+      openedRef.current = "";
+      setScreen((current) =>
+        current.status === "ready"
+          ? { status: "error", message: "La sesión se cerró" }
+          : current.status === "loading"
+            ? { status: "error", message: "La sesión se cerró" }
+            : current,
+      );
+    };
+  }
+
+  function openPage(event: FormEvent) {
     event.preventDefault();
     const normalized = normalizeHttpUrl(url);
     if (!normalized) {
@@ -77,54 +178,17 @@ export function Studio() {
         setScreen({
           status: "error",
           message: "Solo se permiten direcciones http o https",
-          image: null,
         });
         return;
       }
     } catch {
-      setScreen({ status: "error", message: "URL no válida", image: null });
+      setScreen({ status: "error", message: "URL no válida" });
       return;
     }
 
-    const id = requestId.current + 1;
-    requestId.current = id;
-    setScreen({ status: "loading", message: "Capturando…", image: null });
-
-    try {
-      const response = await fetch("/api/capture", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          url: normalized,
-          width: device.width,
-          height: device.height,
-        }),
-      });
-
-      if (!response.ok) {
-        let message = "No se pudo capturar esta página";
-        try {
-          const data = (await response.json()) as { error?: unknown };
-          if (typeof data.error === "string" && data.error) message = data.error;
-        } catch {
-          message = "No se pudo capturar esta página";
-        }
-        throw new Error(message);
-      }
-
-      const blob = await response.blob();
-      if (blob.size < 32) throw new Error("No se pudo capturar esta página");
-      const image = await loadImage(blob);
-      if (requestId.current !== id) return;
-      setScreen({ status: "ready", message: "", image });
-    } catch (error) {
-      if (requestId.current !== id) return;
-      setScreen({
-        status: "error",
-        message: error instanceof Error ? error.message : "No se pudo capturar esta página",
-        image: null,
-      });
-    }
+    rememberFrame(null);
+    setScreen({ status: "loading", message: "Abriendo…" });
+    attachSocket(normalized, viewport.width, viewport.height);
   }
 
   return (
@@ -132,7 +196,7 @@ export function Studio() {
       <header className="z-20 flex flex-col gap-4 border-b border-[#ebebeb] bg-white px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:gap-10">
         <div className="text-[15px] font-medium tracking-tight">Mockup</div>
         <form
-          onSubmit={capture}
+          onSubmit={openPage}
           className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center"
         >
           <Input
@@ -156,7 +220,7 @@ export function Studio() {
             >
               <SelectTrigger
                 aria-label="Dispositivo"
-                className="h-9 w-[168px] border-[#ebebeb] bg-white shadow-none"
+                className="h-9 w-[168px] border-[#ebebeb] bg-white shadow-none sm:w-[188px]"
               >
                 <SelectValue>
                   {(value: DeviceId | null) =>
@@ -173,7 +237,7 @@ export function Studio() {
               </SelectContent>
             </Select>
             <Button type="submit" disabled={loading} className="h-9 px-3.5">
-              {loading ? "Capturando…" : "Capturar"}
+              {loading ? "Abriendo…" : "Abrir"}
             </Button>
           </div>
         </form>
@@ -184,10 +248,12 @@ export function Studio() {
           <Scene
             device={device}
             screen={screen}
+            frame={frame}
             apertura={apertura}
             light={light}
             background={background}
             exportRef={exportRef}
+            onInput={sendInput}
           />
         </div>
 

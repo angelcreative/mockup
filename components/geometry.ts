@@ -53,14 +53,37 @@ export function roundedBodyGeometry(
 
 export const SCREEN_HEIGHT = 4.72;
 
-export function frameSize(cssWidth: number, cssHeight: number) {
+export function frameSize(
+  cssWidth: number,
+  cssHeight: number,
+  profile: "phone" | "tablet" = "phone",
+) {
   const aspect = cssWidth / cssHeight;
-  const screenH = SCREEN_HEIGHT;
-  const screenW = SCREEN_HEIGHT * aspect;
-  const bezel = Math.max(0.07, screenW * 0.038);
+  const screenH = profile === "tablet" ? 4.15 : SCREEN_HEIGHT;
+  const screenW = screenH * aspect;
+  const bezel =
+    profile === "tablet"
+      ? Math.max(0.038, Math.min(screenW, screenH) * 0.016)
+      : Math.max(0.07, screenW * 0.038);
   const bodyW = screenW + bezel * 2;
   const bodyH = screenH + bezel * 2;
-  const depth = 0.15;
-  const radius = Math.min(bodyW * 0.18, 0.42);
-  return { screenW, screenH, bodyW, bodyH, depth, radius, aspect };
+  const depth = profile === "tablet" ? 0.08 : 0.15;
+  const radius =
+    profile === "tablet" ? Math.min(screenW, screenH) * 0.045 : Math.min(bodyW * 0.18, 0.42);
+  return { screenW, screenH, bodyW, bodyH, depth, radius, aspect, bezel };
+}
+
+export function topNotchGeometry(width: number, height: number, radius: number) {
+  const r = Math.min(Math.max(radius, 0.001), width / 2, height);
+  const w = width / 2;
+  const h = height / 2;
+  const shape = new THREE.Shape();
+  shape.moveTo(-w, h);
+  shape.lineTo(w, h);
+  shape.lineTo(w, -h + r);
+  shape.absarc(w - r, -h + r, r, 0, -Math.PI / 2, true);
+  shape.lineTo(-w + r, -h);
+  shape.absarc(-w + r, -h + r, r, -Math.PI / 2, -Math.PI, true);
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape, 12);
 }
