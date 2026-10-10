@@ -23,6 +23,8 @@ import {
   topNotchGeometry,
 } from "@/components/geometry";
 import { RearModule, SideControls } from "@/components/hardware";
+import { ImacMesh, LaptopMesh, macFoot, macSpan } from "@/components/macs";
+import { landscapeStatusPx } from "@/lib/devices";
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -90,8 +92,11 @@ function screenUserData(
     panel,
     screenWidth,
     screenHeight: device.height,
+    glassWidth: device.width,
     topInset: device.topInset,
     bottomInset: device.bottomInset,
+    cutout: device.cutout,
+    landscapeStatus: landscapeStatusPx(device),
   };
 }
 
@@ -208,14 +213,18 @@ function hitData(
   screenWidth: number,
   screenHeight: number,
   interactive: boolean,
+  glassWidth: number,
 ) {
   return {
     screen: interactive,
     panel,
     screenWidth,
     screenHeight,
+    glassWidth,
     topInset: 59,
     bottomInset: 34,
+    cutout: "island" as const,
+    landscapeStatus: 32,
   };
 }
 
@@ -296,7 +305,7 @@ function DuoMesh({
             geometry={innerGlass}
             position={[innerShift, 0, zFront]}
             visible={open}
-            userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
+            userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open, DUO_INNER_WIDTH)}
           >
           <meshBasicMaterial map={leftTexture} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
@@ -313,7 +322,7 @@ function DuoMesh({
             geometry={innerGlass}
             position={[-innerShift, 0, zFront]}
             visible={open}
-            userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
+            userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open, DUO_INNER_WIDTH)}
           >
             <meshBasicMaterial map={rightTexture} toneMapped={false} side={THREE.DoubleSide} />
           </mesh>
@@ -321,7 +330,7 @@ function DuoMesh({
             <mesh
               geometry={outerGlass}
               visible={!open}
-              userData={hitData("single", DUO_OUTER_WIDTH, DUO_OUTER_HEIGHT, !open)}
+              userData={hitData("single", DUO_OUTER_WIDTH, DUO_OUTER_HEIGHT, !open, DUO_OUTER_WIDTH)}
             >
               <meshBasicMaterial map={texture} toneMapped={false} side={THREE.DoubleSide} />
             </mesh>
@@ -373,10 +382,25 @@ export function DeviceModel({
       />
     );
   }
+  if (device.kind === "laptop") {
+    return (
+      <LaptopMesh
+        device={device}
+        texture={texture}
+        status={status}
+        apertura={apertura}
+        finish={finish}
+      />
+    );
+  }
+  if (device.kind === "desktop") {
+    return <ImacMesh device={device} texture={texture} status={status} finish={finish} />;
+  }
   return <Slab device={device} texture={texture} status={status} finish={finish} />;
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
+  if (device.kind === "laptop" || device.kind === "desktop") return macSpan(device, apertura);
   if (device.id === "iphone-duo") {
     const width = (isDuoOpen(apertura) ? DUO_BODY.openWidth : DUO_BODY.closedWidth) * DUO_CM;
     return Math.max(width, DUO_BODY.height * DUO_CM);
@@ -390,6 +414,7 @@ export function deviceFoot(
   orientation: Orientation = "portrait",
   apertura = 0,
 ) {
+  if (device.kind === "laptop" || device.kind === "desktop") return macFoot(device, apertura);
   if (device.id === "iphone-duo") {
     const vertical =
       orientation === "landscape"

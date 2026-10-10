@@ -234,6 +234,7 @@ function layoutFor(rear: RearLayout) {
 
 /** Local bounds of each module, including a side flash and the bevel on the plate. */
 const MODULE_EXTENT: Record<RearLayout, { minX: number; maxX: number; minY: number; maxY: number }> = {
+  none: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
   "iphone-14": { minX: -0.51, maxX: 0.51, minY: -0.51, maxY: 0.51 },
   "iphone-15": { minX: -0.41, maxX: 0.64, minY: -0.79, maxY: 0.79 },
   "iphone-16": { minX: -0.42, maxX: 0.67, minY: -0.89, maxY: 0.89 },
@@ -258,6 +259,7 @@ export function RearModule({
   depth: number;
   radius: number;
 }) {
+  if (rear === "none") return null;
   const scale = rear === "iphone-duo" ? 0.72 : 1;
   const box = MODULE_EXTENT[rear];
   const minX = box.minX * scale;
@@ -310,6 +312,7 @@ export function SideControls({
   color: string;
   edge?: "both" | "left" | "right";
 }) {
+  if (layout === "none") return null;
   // The side wall at mid-depth is the unbevelled silhouette, x = ±bodyW/2.
   // Seat the bar so it bites the metal by a hair and the rest stands proud.
   const overlap = 0.008;

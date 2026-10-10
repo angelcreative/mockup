@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Mockup",
-  description: "Abre un sitio en un dispositivo 3D y recórrelo en vivo.",
+  description: "Open a site on a 3D device and browse it live.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { ScreenInput } from "@/components/scene";
+import type { ScreenInput, ShotMode } from "@/components/scene";
 import {
   BACKGROUNDS,
   DEVICES,
@@ -35,8 +35,10 @@ const Scene = dynamic(() => import("@/components/scene"), {
 
 const EMPTY_SCREEN: ScreenState = {
   status: "empty",
-  message: "Pega una URL para abrir el sitio",
+  message: "Paste a URL to open the site",
 };
+
+const DEFAULT_URL = "https://angelsanchez.design";
 
 function socketUrl() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -44,16 +46,23 @@ function socketUrl() {
 }
 
 export function Studio() {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(DEFAULT_URL);
   const [deviceId, setDeviceId] = useState<DeviceId>("iphone-14");
   const [background, setBackground] = useState<BackgroundId>("blanco");
+  const [customBg, setCustomBg] = useState<string | null>(null);
+  const [useCustom, setUseCustom] = useState(false);
   const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
   const [light, setLight] = useState(1);
   const [apertura, setApertura] = useState(0);
   const [orientation, setOrientation] = useState<Orientation>("portrait");
-  const [screen, setScreen] = useState<ScreenState>(EMPTY_SCREEN);
+  const [time, setTime] = useState("9:41");
+  const [screen, setScreen] = useState<ScreenState>({
+    status: "loading",
+    message: "Opening…",
+  });
   const [frame, setFrame] = useState<ImageBitmap | null>(null);
-  const exportRef = useRef<(() => void) | null>(null);
+  const exportRef = useRef<((mode: ShotMode) => void) | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const openedRef = useRef("");
   const sentSize = useRef("");
@@ -61,6 +70,7 @@ export function Studio() {
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura, orientation);
   const loading = screen.status === "loading";
+  const handheld = device.kind === "phone" || device.kind === "tablet" || device.kind === "duo";
 
   function rememberFrame(next: ImageBitmap | null) {
     setFrame((current) => {
@@ -92,6 +102,20 @@ export function Studio() {
       socketRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    const first = deviceById("iphone-14");
+    const size = liveViewport(first, 0, "portrait");
+    attachSocket(DEFAULT_URL, size.width, size.height);
+    // Boot once with the default page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (customBg) URL.revokeObjectURL(customBg);
+    };
+  }, [customBg]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -134,10 +158,10 @@ export function Studio() {
         if (message.type === "error") {
           setScreen({ status: "error", message: message.message });
         } else if (message.type === "idle") {
-          setScreen({ status: "error", message: "La sesión se cerró por inactividad" });
+          setScreen({ status: "error", message: "The session closed after inactivity" });
           rememberFrame(null);
         } else if (message.type === "status" && message.state === "loading") {
-          setScreen({ status: "loading", message: "Abriendo…" });
+          setScreen({ status: "loading", message: "Opening…" });
         }
         return;
       }
@@ -164,9 +188,9 @@ export function Studio() {
       openedRef.current = "";
       setScreen((current) =>
         current.status === "ready"
-          ? { status: "error", message: "La sesión se cerró" }
+          ? { status: "error", message: "The session closed" }
           : current.status === "loading"
-            ? { status: "error", message: "La sesión se cerró" }
+            ? { status: "error", message: "The session closed" }
             : current,
       );
     };
@@ -185,17 +209,17 @@ export function Studio() {
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         setScreen({
           status: "error",
-          message: "Solo se permiten direcciones http o https",
+          message: "Only http or https addresses are allowed",
         });
         return;
       }
     } catch {
-      setScreen({ status: "error", message: "URL no válida" });
+      setScreen({ status: "error", message: "Invalid URL" });
       return;
     }
 
     rememberFrame(null);
-    setScreen({ status: "loading", message: "Abriendo…" });
+    setScreen({ status: "loading", message: "Opening…" });
     attachSocket(normalized, viewport.width, viewport.height);
   }
 
@@ -210,8 +234,8 @@ export function Studio() {
           <Input
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder="https://elpais.es"
-            aria-label="URL del sitio"
+            placeholder={DEFAULT_URL}
+            aria-label="Site URL"
             inputMode="url"
             autoCapitalize="none"
             autoCorrect="off"
@@ -223,16 +247,20 @@ export function Studio() {
               value={deviceId}
               items={DEVICES.map((item) => ({ value: item.id, label: item.label }))}
               onValueChange={(value) => {
-                if (value && isDeviceId(value)) setDeviceId(value);
+                if (!value || !isDeviceId(value)) return;
+                const next = deviceById(value);
+                if (next.kind === "laptop" && device.kind !== "laptop") setApertura(1);
+                if (next.id === "iphone-duo" && device.id !== "iphone-duo") setApertura(0);
+                setDeviceId(value);
               }}
             >
               <SelectTrigger
-                aria-label="Dispositivo"
-                className="h-9 w-[168px] border-[#ebebeb] bg-white shadow-none sm:w-[188px]"
+                aria-label="Device"
+                className="h-9 w-[168px] border-[#ebebeb] bg-white shadow-none sm:w-[210px]"
               >
                 <SelectValue>
                   {(value: DeviceId | null) =>
-                    DEVICES.find((item) => item.id === value)?.label ?? "Dispositivo"
+                    DEVICES.find((item) => item.id === value)?.label ?? "Device"
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -245,7 +273,7 @@ export function Studio() {
               </SelectContent>
             </Select>
             <Button type="submit" disabled={loading} className="h-9 px-3.5">
-              {loading ? "Abriendo…" : "Abrir"}
+              {loading ? "Opening…" : "Open"}
             </Button>
           </div>
         </form>
@@ -261,7 +289,9 @@ export function Studio() {
             orientation={orientation}
             light={light}
             background={background}
+            backgroundImage={useCustom ? customBg : null}
             finish={finish}
+            time={time || "9:41"}
             exportRef={exportRef}
             onInput={sendInput}
           />
@@ -271,8 +301,8 @@ export function Studio() {
           <div className="pointer-events-auto w-full max-w-[280px] rounded-xl border border-[#ebebeb] bg-white p-4">
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Acabado</span>
-                <div className="flex flex-wrap gap-1.5" role="listbox" aria-label="Acabado">
+                <span className="text-[13px] text-neutral-500">Finish</span>
+                <div className="flex flex-wrap gap-1.5" role="listbox" aria-label="Finish">
                   {device.finishes.map((item) => {
                     const selected = item.id === finish.id;
                     return (
@@ -300,15 +330,51 @@ export function Studio() {
                 </div>
               </div>
               <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Fondo</span>
-                <div className="flex max-h-36 flex-col gap-1 overflow-y-auto pr-0.5">
+                <span className="text-[13px] text-neutral-500">Background</span>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  aria-label="Upload a background image"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (!file || !file.type.startsWith("image/")) return;
+                    const next = URL.createObjectURL(file);
+                    setCustomBg(next);
+                    setUseCustom(true);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                  onClick={() => fileRef.current?.click()}
+                >
+                  Upload image
+                </Button>
+                {customBg ? (
+                  <Button
+                    type="button"
+                    variant={useCustom ? "default" : "outline"}
+                    className="h-8 justify-start border-[#ebebeb] px-2 text-[13px]"
+                    onClick={() => setUseCustom(true)}
+                  >
+                    Your image
+                  </Button>
+                ) : null}
+                <div className="flex max-h-28 flex-col gap-1 overflow-y-auto pr-0.5">
                   {BACKGROUNDS.map((item) => (
                     <Button
                       key={item.id}
                       type="button"
-                      variant={background === item.id ? "default" : "outline"}
+                      variant={!useCustom && background === item.id ? "default" : "outline"}
                       className="h-8 w-full shrink-0 justify-start gap-1.5 border-[#ebebeb] px-2 text-[13px]"
-                      onClick={() => setBackground(item.id)}
+                      onClick={() => {
+                        setUseCustom(false);
+                        setBackground(item.id);
+                      }}
                     >
                       <span
                         className="size-3.5 shrink-0 rounded-full border border-black/10"
@@ -319,30 +385,41 @@ export function Studio() {
                   ))}
                 </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Orientación</span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <Button
-                    type="button"
-                    variant={orientation === "portrait" ? "default" : "outline"}
-                    className="h-8 border-[#ebebeb] px-2 text-[13px]"
-                    onClick={() => setOrientation("portrait")}
-                  >
-                    Vertical
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={orientation === "landscape" ? "default" : "outline"}
-                    className="h-8 border-[#ebebeb] px-2 text-[13px]"
-                    onClick={() => setOrientation("landscape")}
-                  >
-                    Horizontal
-                  </Button>
+              {handheld ? (
+                <div className="flex flex-col gap-2">
+                  <span className="text-[13px] text-neutral-500">Orientation</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      type="button"
+                      variant={orientation === "portrait" ? "default" : "outline"}
+                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                      onClick={() => setOrientation("portrait")}
+                    >
+                      Portrait
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={orientation === "landscape" ? "default" : "outline"}
+                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                      onClick={() => setOrientation("landscape")}
+                    >
+                      Landscape
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              ) : null}
+              <label className="flex flex-col gap-2">
+                <span className="text-[13px] text-neutral-500">Time</span>
+                <Input
+                  value={time}
+                  onChange={(event) => setTime(event.target.value.slice(0, 8))}
+                  aria-label="Time"
+                  className="h-8 border-[#ebebeb] bg-white text-[13px] shadow-none"
+                />
+              </label>
               <label className="flex flex-col gap-2">
                 <span className="flex items-center justify-between text-[13px]">
-                  <span className="text-neutral-500">Luz</span>
+                  <span className="text-neutral-500">Light</span>
                   <span className="tabular-nums">{light.toFixed(1)}</span>
                 </span>
                 <Slider
@@ -354,13 +431,13 @@ export function Studio() {
                     const next = Array.isArray(value) ? value[0] : value;
                     setLight(next);
                   }}
-                  aria-label="Luz"
+                  aria-label="Light"
                 />
               </label>
               {deviceId === "iphone-duo" ? (
                 <label className="flex flex-col gap-2">
                   <span className="flex items-center justify-between text-[13px]">
-                    <span className="text-neutral-500">Apertura</span>
+                    <span className="text-neutral-500">Opening</span>
                     <span className="tabular-nums">{apertura.toFixed(1)}</span>
                   </span>
                   <Slider
@@ -372,19 +449,48 @@ export function Studio() {
                       const next = Array.isArray(value) ? value[0] : value;
                       setApertura(next);
                     }}
-                    aria-label="Apertura"
+                    aria-label="Opening"
+                  />
+                </label>
+              ) : null}
+              {device.kind === "laptop" ? (
+                <label className="flex flex-col gap-2">
+                  <span className="flex items-center justify-between text-[13px]">
+                    <span className="text-neutral-500">Lid</span>
+                    <span className="tabular-nums">{apertura.toFixed(1)}</span>
+                  </span>
+                  <Slider
+                    value={[apertura]}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onValueChange={(value) => {
+                      const next = Array.isArray(value) ? value[0] : value;
+                      setApertura(next);
+                    }}
+                    aria-label="Lid"
                   />
                 </label>
               ) : null}
             </div>
           </div>
-          <Button
-            type="button"
-            className="pointer-events-auto h-9 px-3.5"
-            onClick={() => exportRef.current?.()}
-          >
-            Guardar imagen
-          </Button>
+          <div className="pointer-events-auto w-full max-w-[220px] rounded-xl border border-[#ebebeb] bg-white p-3">
+            <span className="text-[13px] text-neutral-500">Save image</span>
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => exportRef.current?.("png")}>
+                PNG
+              </Button>
+              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("transparent")}>
+                Transparent
+              </Button>
+              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("square")}>
+                Square
+              </Button>
+              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("story")}>
+                Story
+              </Button>
+            </div>
+          </div>
         </div>
       </main>
     </div>

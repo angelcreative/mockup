@@ -11,11 +11,16 @@ export type DeviceId =
   | "ipad-air-13"
   | "ipad-air-11"
   | "ipad"
-  | "ipad-mini";
+  | "ipad-mini"
+  | "macbook-air-13"
+  | "macbook-air-15"
+  | "macbook-pro-14"
+  | "macbook-pro-16"
+  | "imac-24";
 
 export type Cutout = "notch" | "island" | "none";
 
-export type DeviceKind = "phone" | "tablet" | "duo";
+export type DeviceKind = "phone" | "tablet" | "duo" | "laptop" | "desktop";
 
 export type CameraEdge = "none" | "top" | "right";
 
@@ -29,9 +34,10 @@ export type RearLayout =
   | "ipad-pro"
   | "ipad-air"
   | "ipad"
-  | "ipad-mini";
+  | "ipad-mini"
+  | "none";
 
-export type ButtonLayout = "switch" | "action" | "duo" | "ipad" | "mini";
+export type ButtonLayout = "switch" | "action" | "duo" | "ipad" | "mini" | "none";
 
 export type FinishSpec = {
   id: string;
@@ -88,6 +94,12 @@ const IPHONE_UA =
 const IPAD_UA =
   "Mozilla/5.0 (iPad; CPU OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1";
 
+const MAC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+
+/** Landscape status bar, in CSS px. Phones keep the island band on the side, so this is a normal bar. */
+export const LANDSCAPE_STATUS = 32;
+
 export const DEVICES: readonly DeviceSpec[] = [
   {
     id: "iphone-14",
@@ -96,12 +108,12 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 844,
     cutout: "notch",
     finishes: [
-      { id: "medianoche", label: "Medianoche", color: "#1c1d21", ...aluminum },
-      { id: "purpura", label: "Púrpura", color: "#5c4e72", ...aluminum },
-      { id: "blanco-estelar", label: "Blanco estelar", color: "#f1ece3", ...aluminum },
+      { id: "medianoche", label: "Midnight", color: "#1c1d21", ...aluminum },
+      { id: "purpura", label: "Purple", color: "#5c4e72", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f1ece3", ...aluminum },
       { id: "product-red", label: "(PRODUCT)RED", color: "#c4122f", ...aluminum },
-      { id: "azul", label: "Azul", color: "#2f6d94", ...aluminum },
-      { id: "amarillo", label: "Amarillo", color: "#f0d56a", ...aluminum },
+      { id: "azul", label: "Blue", color: "#2f6d94", ...aluminum },
+      { id: "amarillo", label: "Yellow", color: "#f0d56a", ...aluminum },
     ],
     kind: "phone",
     topInset: 47,
@@ -117,11 +129,11 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 852,
     cutout: "island",
     finishes: [
-      { id: "negro", label: "Negro", color: "#2a2a2e", ...glassBack },
-      { id: "azul", label: "Azul", color: "#c5d4e4", ...glassBack },
-      { id: "verde", label: "Verde", color: "#d4e3c6", ...glassBack },
-      { id: "amarillo", label: "Amarillo", color: "#f3e4bc", ...glassBack },
-      { id: "rosa", label: "Rosa", color: "#f3d2d6", ...glassBack },
+      { id: "negro", label: "Black", color: "#2a2a2e", ...glassBack },
+      { id: "azul", label: "Blue", color: "#c5d4e4", ...glassBack },
+      { id: "verde", label: "Green", color: "#d4e3c6", ...glassBack },
+      { id: "amarillo", label: "Yellow", color: "#f3e4bc", ...glassBack },
+      { id: "rosa", label: "Pink", color: "#f3d2d6", ...glassBack },
     ],
     kind: "phone",
     topInset: 59,
@@ -137,11 +149,11 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 852,
     cutout: "island",
     finishes: [
-      { id: "negro", label: "Negro", color: "#3a3a3c", ...glassBack },
-      { id: "blanco", label: "Blanco", color: "#f4f4f6", ...glassBack },
-      { id: "rosa", label: "Rosa", color: "#f2b7c4", ...glassBack },
-      { id: "verde-azulado", label: "Verde azulado", color: "#62b8ae", ...glassBack },
-      { id: "ultramarino", label: "Ultramarino", color: "#3a4fd0", ...glassBack },
+      { id: "negro", label: "Black", color: "#3a3a3c", ...glassBack },
+      { id: "blanco", label: "White", color: "#f4f4f6", ...glassBack },
+      { id: "rosa", label: "Pink", color: "#f2b7c4", ...glassBack },
+      { id: "verde-azulado", label: "Teal", color: "#62b8ae", ...glassBack },
+      { id: "ultramarino", label: "Ultramarine", color: "#3a4fd0", ...glassBack },
     ],
     kind: "phone",
     topInset: 59,
@@ -157,10 +169,10 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 874,
     cutout: "island",
     finishes: [
-      { id: "titanio-negro", label: "Titanio negro", color: "#3a3a3c", ...titanium },
-      { id: "titanio-blanco", label: "Titanio blanco", color: "#f1f0ec", ...titanium },
-      { id: "titanio-natural", label: "Titanio natural", color: "#c4bbae", ...titanium },
-      { id: "titanio-desierto", label: "Titanio del desierto", color: "#c4a27a", ...titanium },
+      { id: "titanio-negro", label: "Black titanium", color: "#3a3a3c", ...titanium },
+      { id: "titanio-blanco", label: "White titanium", color: "#f1f0ec", ...titanium },
+      { id: "titanio-natural", label: "Natural titanium", color: "#c4bbae", ...titanium },
+      { id: "titanio-desierto", label: "Desert titanium", color: "#c4a27a", ...titanium },
     ],
     kind: "phone",
     topInset: 59,
@@ -176,8 +188,8 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: DUO_OUTER_HEIGHT,
     cutout: "island",
     finishes: [
-      { id: "cielo-nocturno", label: "Cielo nocturno", color: "#1a2433", metalness: 0.72, roughness: 0.34 },
-      { id: "blanco-estelar", label: "Blanco estelar", color: "#f3efe4", metalness: 0.46, roughness: 0.4 },
+      { id: "cielo-nocturno", label: "Night sky", color: "#1a2433", metalness: 0.72, roughness: 0.34 },
+      { id: "blanco-estelar", label: "Star white", color: "#f3efe4", metalness: 0.46, roughness: 0.4 },
     ],
     kind: "duo",
     topInset: DUO_TOP_INSET,
@@ -193,8 +205,8 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1376,
     cutout: "none",
     finishes: [
-      { id: "plata", label: "Plata", color: "#e4e5e8", ...aluminum },
-      { id: "negro-espacial", label: "Negro espacial", color: "#1c1c1e", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e4e5e8", ...aluminum },
+      { id: "negro-espacial", label: "Space black", color: "#1c1c1e", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -210,8 +222,8 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1210,
     cutout: "none",
     finishes: [
-      { id: "plata", label: "Plata", color: "#e4e5e8", ...aluminum },
-      { id: "negro-espacial", label: "Negro espacial", color: "#1c1c1e", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e4e5e8", ...aluminum },
+      { id: "negro-espacial", label: "Space black", color: "#1c1c1e", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -227,10 +239,10 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1366,
     cutout: "none",
     finishes: [
-      { id: "azul", label: "Azul", color: "#6e93b8", ...aluminum },
-      { id: "purpura", label: "Púrpura", color: "#a394c2", ...aluminum },
-      { id: "blanco-estelar", label: "Blanco estelar", color: "#f1ece3", ...aluminum },
-      { id: "gris-espacial", label: "Gris espacial", color: "#7a7c80", ...aluminum },
+      { id: "azul", label: "Blue", color: "#6e93b8", ...aluminum },
+      { id: "purpura", label: "Purple", color: "#a394c2", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f1ece3", ...aluminum },
+      { id: "gris-espacial", label: "Space gray", color: "#7a7c80", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -246,10 +258,10 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1180,
     cutout: "none",
     finishes: [
-      { id: "azul", label: "Azul", color: "#6e93b8", ...aluminum },
-      { id: "purpura", label: "Púrpura", color: "#a394c2", ...aluminum },
-      { id: "blanco-estelar", label: "Blanco estelar", color: "#f1ece3", ...aluminum },
-      { id: "gris-espacial", label: "Gris espacial", color: "#7a7c80", ...aluminum },
+      { id: "azul", label: "Blue", color: "#6e93b8", ...aluminum },
+      { id: "purpura", label: "Purple", color: "#a394c2", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f1ece3", ...aluminum },
+      { id: "gris-espacial", label: "Space gray", color: "#7a7c80", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -265,10 +277,10 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1180,
     cutout: "none",
     finishes: [
-      { id: "plata", label: "Plata", color: "#e6e7ea", ...aluminum },
-      { id: "azul", label: "Azul", color: "#2f78c4", ...aluminum },
-      { id: "rosa", label: "Rosa", color: "#f0a8b8", ...aluminum },
-      { id: "amarillo", label: "Amarillo", color: "#f2d15a", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e6e7ea", ...aluminum },
+      { id: "azul", label: "Blue", color: "#2f78c4", ...aluminum },
+      { id: "rosa", label: "Pink", color: "#f0a8b8", ...aluminum },
+      { id: "amarillo", label: "Yellow", color: "#f2d15a", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -284,10 +296,10 @@ export const DEVICES: readonly DeviceSpec[] = [
     height: 1133,
     cutout: "none",
     finishes: [
-      { id: "azul", label: "Azul", color: "#7f9bb5", ...aluminum },
-      { id: "purpura", label: "Púrpura", color: "#9a8cb4", ...aluminum },
-      { id: "blanco-estelar", label: "Blanco estelar", color: "#f0ebe2", ...aluminum },
-      { id: "gris-espacial", label: "Gris espacial", color: "#6e7074", ...aluminum },
+      { id: "azul", label: "Blue", color: "#7f9bb5", ...aluminum },
+      { id: "purpura", label: "Purple", color: "#9a8cb4", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f0ebe2", ...aluminum },
+      { id: "gris-espacial", label: "Space gray", color: "#6e7074", ...aluminum },
     ],
     kind: "tablet",
     topInset: 24,
@@ -296,12 +308,106 @@ export const DEVICES: readonly DeviceSpec[] = [
     rear: "ipad-mini",
     buttons: "mini",
   },
+  {
+    id: "macbook-air-13",
+    label: "MacBook Air 13\"",
+    width: 1280,
+    height: 832,
+    cutout: "notch",
+    finishes: [
+      { id: "azul-cielo", label: "Sky blue", color: "#9ec4d6", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e3e4e6", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f0ebe4", ...aluminum },
+      { id: "medianoche", label: "Midnight", color: "#2c2e33", metalness: 0.55, roughness: 0.34 },
+    ],
+    kind: "laptop",
+    topInset: 37,
+    bottomInset: 0,
+    camera: "top",
+    rear: "none",
+    buttons: "none",
+  },
+  {
+    id: "macbook-air-15",
+    label: "MacBook Air 15\"",
+    width: 1440,
+    height: 932,
+    cutout: "notch",
+    finishes: [
+      { id: "azul-cielo", label: "Sky blue", color: "#9ec4d6", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e3e4e6", ...aluminum },
+      { id: "blanco-estelar", label: "Starlight", color: "#f0ebe4", ...aluminum },
+      { id: "medianoche", label: "Midnight", color: "#2c2e33", metalness: 0.55, roughness: 0.34 },
+    ],
+    kind: "laptop",
+    topInset: 37,
+    bottomInset: 0,
+    camera: "top",
+    rear: "none",
+    buttons: "none",
+  },
+  {
+    id: "macbook-pro-14",
+    label: "MacBook Pro 14\"",
+    width: 1512,
+    height: 982,
+    cutout: "notch",
+    finishes: [
+      { id: "negro-espacial", label: "Space black", color: "#2a2b2e", metalness: 0.58, roughness: 0.32 },
+      { id: "plata", label: "Silver", color: "#e4e5e8", ...aluminum },
+    ],
+    kind: "laptop",
+    topInset: 37,
+    bottomInset: 0,
+    camera: "top",
+    rear: "none",
+    buttons: "none",
+  },
+  {
+    id: "macbook-pro-16",
+    label: "MacBook Pro 16\"",
+    width: 1728,
+    height: 1117,
+    cutout: "notch",
+    finishes: [
+      { id: "negro-espacial", label: "Space black", color: "#2a2b2e", metalness: 0.58, roughness: 0.32 },
+      { id: "plata", label: "Silver", color: "#e4e5e8", ...aluminum },
+    ],
+    kind: "laptop",
+    topInset: 37,
+    bottomInset: 0,
+    camera: "top",
+    rear: "none",
+    buttons: "none",
+  },
+  {
+    id: "imac-24",
+    label: "iMac 24\"",
+    width: 2240,
+    height: 1260,
+    cutout: "none",
+    finishes: [
+      { id: "azul", label: "Blue", color: "#5b92c9", ...aluminum },
+      { id: "verde", label: "Green", color: "#8eae7a", ...aluminum },
+      { id: "rosa", label: "Pink", color: "#f0b3c2", ...aluminum },
+      { id: "plata", label: "Silver", color: "#e3e4e6", ...aluminum },
+      { id: "amarillo", label: "Yellow", color: "#f3d56a", ...aluminum },
+      { id: "naranja", label: "Orange", color: "#f0a05a", ...aluminum },
+      { id: "purpura", label: "Purple", color: "#a98bc4", ...aluminum },
+    ],
+    kind: "desktop",
+    topInset: 24,
+    bottomInset: 0,
+    camera: "top",
+    rear: "none",
+    buttons: "none",
+  },
 ];
 
 export const BACKGROUNDS = [
-  { id: "blanco", label: "Blanco", color: "#ffffff", css: "#ffffff" },
-  { id: "niebla", label: "Niebla", color: "#e8e8e8", css: "#e8e8e8" },
-  { id: "negro", label: "Negro", color: "#111111", css: "#111111" },
+  { id: "blanco", label: "White", color: "#ffffff", css: "#ffffff" },
+  { id: "niebla", label: "Mist", color: "#e8e8e8", css: "#e8e8e8" },
+  { id: "negro", label: "Black", color: "#111111", css: "#111111" },
   ...WALLPAPER_BACKGROUNDS,
 ] as const;
 
@@ -352,6 +458,21 @@ export function contentSize(device: DeviceSpec) {
   };
 }
 
+export function isComputer(device: DeviceSpec) {
+  return device.kind === "laptop" || device.kind === "desktop";
+}
+
+/** Phones and Duo keep the cutout band on the side. iPad's top inset was only the status bar. */
+export function landscapeSideTop(device: DeviceSpec) {
+  return device.cutout === "none" ? 0 : device.topInset;
+}
+
+export function landscapeStatusPx(device: DeviceSpec) {
+  if (device.kind === "tablet") return device.topInset;
+  if (device.kind === "phone" || device.kind === "duo") return LANDSCAPE_STATUS;
+  return 0;
+}
+
 export type Orientation = "portrait" | "landscape";
 
 export function liveViewport(
@@ -359,52 +480,61 @@ export function liveViewport(
   apertura: number,
   orientation: Orientation = "portrait",
 ) {
-  const portrait =
+  if (isComputer(device)) return contentSize(device);
+
+  const glass =
     device.id === "iphone-duo"
-      ? {
-          width: duoScreen(apertura).width,
-          height: Math.max(1, duoScreen(apertura).height - device.topInset - device.bottomInset),
-        }
-      : contentSize(device);
-  if (orientation === "landscape") {
-    return { width: portrait.height, height: portrait.width };
+      ? duoScreen(apertura)
+      : { width: device.width, height: device.height };
+
+  if (orientation !== "landscape") {
+    return {
+      width: glass.width,
+      height: Math.max(1, glass.height - device.topInset - device.bottomInset),
+    };
   }
-  return portrait;
+
+  return {
+    width: Math.max(1, glass.height - landscapeSideTop(device) - device.bottomInset),
+    height: Math.max(1, glass.width - landscapeStatusPx(device)),
+  };
 }
 
 function dsfFor(width: number, height: number) {
   return width * height > 600_000 ? 1 : 2;
 }
 
-function sameViewport(width: number, height: number, portraitW: number, portraitH: number) {
-  return (
-    (width === portraitW && height === portraitH) || (width === portraitH && height === portraitW)
-  );
+function matchesViewport(device: DeviceSpec, width: number, height: number) {
+  if (isComputer(device)) {
+    const size = contentSize(device);
+    return width === size.width && height === size.height;
+  }
+  const apertures = device.id === "iphone-duo" ? [0, 1] : [0];
+  for (const apertura of apertures) {
+    for (const orientation of ["portrait", "landscape"] as const) {
+      const size = liveViewport(device, apertura, orientation);
+      if (size.width === width && size.height === height) return true;
+    }
+  }
+  return false;
 }
 
 export function profileForViewport(width: number, height: number): ViewportProfile | null {
   if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
 
   for (const device of DEVICES) {
-    if (device.id === "iphone-duo") {
-      const closed = liveViewport(device, 0);
-      const open = liveViewport(device, 1);
-      const match =
-        sameViewport(width, height, closed.width, closed.height) ||
-        sameViewport(width, height, open.width, open.height);
-      if (!match) continue;
+    if (!matchesViewport(device, width, height)) continue;
+    if (isComputer(device)) {
       return {
         width,
         height,
-        userAgent: IPHONE_UA,
-        platform: "iPhone",
-        mobile: true,
+        userAgent: MAC_UA,
+        platform: "MacIntel",
+        mobile: false,
         dsf: dsfFor(width, height),
-        kind: "duo",
+        kind: device.kind,
       };
     }
-    const content = contentSize(device);
-    if (!sameViewport(width, height, content.width, content.height)) continue;
     const tablet = device.kind === "tablet";
     return {
       width,

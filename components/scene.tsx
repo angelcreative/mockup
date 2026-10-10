@@ -6,7 +6,7 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
-import { BACKGROUNDS, duoScreen, isDuoOpen, liveViewport } from "@/lib/devices";
+import { BACKGROUNDS, duoScreen, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
 import { paintScreen } from "@/components/chrome";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
@@ -14,6 +14,8 @@ import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 export type ScreenInput =
   | { action: "move" | "down" | "up"; x: number; y: number; button: number }
   | { action: "wheel"; x: number; y: number; button: number; deltaX: number; deltaY: number };
+
+export type ShotMode = "png" | "transparent" | "square" | "story";
 
 function makeCanvasTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
@@ -58,7 +60,7 @@ function useDeviceTexture(
   frame: ImageBitmap | null,
   status: ScreenState["status"],
   message: string,
-  clock: number,
+  time: string,
   apertura: number,
   orientation: Orientation,
 ) {
@@ -82,7 +84,8 @@ function useDeviceTexture(
       message,
       bounds.width,
       bounds.height,
-      orientation,
+      isComputer(device) ? "portrait" : orientation,
+      time,
     );
     copyPanel(canvas, leftCanvas, bounds.split ? "left" : "full");
     copyPanel(canvas, rightCanvas, bounds.split ? "right" : "full");
@@ -92,7 +95,7 @@ function useDeviceTexture(
   }, [
     apertura,
     canvas,
-    clock,
+    time,
     device,
     frame,
     leftCanvas,
@@ -141,18 +144,87 @@ function cssBackgroundTexture(css: string) {
   return texture;
 }
 
-function SceneBackground({ background }: { background: BackgroundId }) {
+function useUploadedBackground(image: string | null) {
+  const [photo, setPhoto] = useState<{ url: string; texture: THREE.Texture } | null>(null);
+
+  useEffect(() => {
+    if (!image) return;
+    let alive = true;
+    const loader = new THREE.TextureLoader();
+    const loaded = loader.load(image, (next) => {
+      next.colorSpace = THREE.SRGBColorSpace;
+      next.needsUpdate = true;
+      if (alive) setPhoto({ url: image, texture: next });
+    });
+    return () => {
+      alive = false;
+      loaded.dispose();
+    };
+  }, [image]);
+
+  if (!image || photo?.url !== image) return null;
+  return photo.texture;
+}
+
+function SceneBackground({
+  background,
+  image,
+}: {
+  background: BackgroundId;
+  image: string | null;
+}) {
   const spec = BACKGROUNDS.find((item) => item.id === background) ?? BACKGROUNDS[0];
-  const painted = spec.color === null ? spec.css : null;
-  const texture = useMemo(() => (painted ? cssBackgroundTexture(painted) : null), [painted]);
+  const painted = !image && spec.color === null ? spec.css : null;
+  const cssTexture = useMemo(() => (painted ? cssBackgroundTexture(painted) : null), [painted]);
+  const photo = useUploadedBackground(image);
 
-  useEffect(() => () => texture?.dispose(), [texture]);
+  useEffect(() => () => cssTexture?.dispose(), [cssTexture]);
 
+  const texture = image ? photo : cssTexture;
   if (texture) {
     return <primitive attach="background" object={texture} />;
   }
 
   return <color attach="background" args={[spec.color ?? "#ffffff"]} />;
+}
+
+function downloadPng(href: string, name: string) {
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function frameShot(source: HTMLCanvasElement, aspect: number) {
+  const sw = source.width;
+  const sh = source.height;
+  const srcAspect = sw / Math.max(1, sh);
+  const tw = srcAspect > aspect ? sw : Math.round(sh * aspect);
+  const th = srcAspect > aspect ? Math.round(sw / aspect) : sh;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, tw);
+  canvas.height = Math.max(1, th);
+  const context = canvas.getContext("2d");
+  if (!context) return source.toDataURL("image/png");
+  const probe = document.createElement("canvas");
+  probe.width = 1;
+  probe.height = 1;
+  const probeContext = probe.getContext("2d", { willReadFrequently: true });
+  if (probeContext) {
+    probeContext.drawImage(source, 0, 0, 1, 1, 0, 0, 1, 1);
+    const pixel = probeContext.getImageData(0, 0, 1, 1).data;
+    context.fillStyle = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
+  } else {
+    context.fillStyle = "#ffffff";
+  }
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const scale = Math.min(canvas.width / sw, canvas.height / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  context.drawImage(source, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+  return canvas.toDataURL("image/png");
 }
 
 function SoftShadow({ y, strength, width }: { y: number; strength: number; width: number }) {
@@ -193,20 +265,32 @@ function SoftShadow({ y, strength, width }: { y: number; strength: number; width
 function ExportBridge({
   exportRef,
 }: {
-  exportRef: MutableRefObject<(() => void) | null>;
+  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
 }) {
   const { gl, scene, camera } = useThree();
 
   useEffect(() => {
-    exportRef.current = () => {
+    exportRef.current = (mode: ShotMode) => {
+      const previous = scene.background;
+      const clear = new THREE.Color();
+      gl.getClearColor(clear);
+      const clearAlpha = gl.getClearAlpha();
+      if (mode === "transparent") {
+        scene.background = null;
+        gl.setClearColor(0x000000, 0);
+      }
       gl.render(scene, camera);
-      const href = gl.domElement.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.href = href;
-      link.download = "mockup.png";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      const source = gl.domElement;
+      if (mode === "square" || mode === "story") {
+        downloadPng(frameShot(source, mode === "square" ? 1 : 9 / 16), mode === "square" ? "mockup-square.png" : "mockup-story.png");
+      } else {
+        downloadPng(source.toDataURL("image/png"), mode === "transparent" ? "mockup-transparent.png" : "mockup.png");
+      }
+      if (mode === "transparent") {
+        scene.background = previous;
+        gl.setClearColor(clear, clearAlpha);
+        gl.render(scene, camera);
+      }
     };
     return () => {
       exportRef.current = null;
@@ -244,6 +328,9 @@ function readHit(object: THREE.Object3D) {
     screenHeight?: number;
     topInset?: number;
     bottomInset?: number;
+    glassWidth?: number;
+    cutout?: "notch" | "island" | "none";
+    landscapeStatus?: number;
   };
   if (!data.screen || !data.panel) return null;
   if (
@@ -309,6 +396,9 @@ function ScreenPointer({
           screenHeight: data.screenHeight ?? 0,
           topInset: data.topInset ?? 0,
           bottomInset: data.bottomInset ?? 0,
+          glassWidth: data.glassWidth,
+          cutout: data.cutout,
+          landscapeStatus: data.landscapeStatus,
         },
         sizeRef.current.viewportWidth,
         sizeRef.current.viewportHeight,
@@ -417,7 +507,9 @@ function Stage({
   orientation,
   light,
   background,
+  backgroundImage,
   finish,
+  time,
   exportRef,
   onInput,
 }: {
@@ -428,32 +520,34 @@ function Stage({
   orientation: Orientation;
   light: number;
   background: BackgroundId;
+  backgroundImage: string | null;
   finish: FinishSpec;
-  exportRef: MutableRefObject<(() => void) | null>;
+  time: string;
+  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
-  const [clock, setClock] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setClock(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
     frame,
     screen.status,
     screen.message,
-    clock,
+    time,
     apertura,
     orientation,
   );
   const viewport = liveViewport(device, apertura, orientation);
   const span = deviceSpan(device, apertura);
   const foot = deviceFoot(device, orientation, apertura);
+  const turned = orientation === "landscape" && !isComputer(device);
+  const shadowWidth = isComputer(device)
+    ? Math.max(4.4, span * 0.9)
+    : device.id === "iphone-duo" && isDuoOpen(apertura)
+      ? 6.2
+      : 3.6;
 
   return (
     <>
-      <SceneBackground background={background} />
+      <SceneBackground background={background} image={backgroundImage} />
       <ExportBridge exportRef={exportRef} />
       <FrameCamera span={span} />
       <ambientLight intensity={0.55 * light} />
@@ -461,7 +555,7 @@ function Stage({
       <directionalLight position={[3.4, 5.2, 4.2]} intensity={1.25 * light} />
       <directionalLight position={[-3.2, 2.4, 2.2]} intensity={0.38 * light} />
       <directionalLight position={[-1.6, 3.2, -5.4]} intensity={0.9 * light} />
-      <group rotation={[0, 0, orientation === "landscape" ? Math.PI / 2 : 0]}>
+      <group rotation={[0, 0, turned ? Math.PI / 2 : 0]}>
         <DeviceModel
           device={device}
           texture={texture}
@@ -475,7 +569,7 @@ function Stage({
       <SoftShadow
         y={-foot / 2 - 0.012}
         strength={0.9 * Math.min(Math.max(light, 0), 1.3)}
-        width={device.id === "iphone-duo" && isDuoOpen(apertura) ? 6.2 : 3.6}
+        width={shadowWidth}
       />
       <OrbitControls
         makeDefault
@@ -490,7 +584,7 @@ function Stage({
       <ScreenPointer
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
-        orientation={orientation}
+        orientation={turned ? "landscape" : "portrait"}
         onInput={onInput}
       />
     </>
@@ -505,7 +599,9 @@ export default function Scene({
   orientation,
   light,
   background,
+  backgroundImage,
   finish,
+  time,
   exportRef,
   onInput,
 }: {
@@ -516,8 +612,10 @@ export default function Scene({
   orientation: Orientation;
   light: number;
   background: BackgroundId;
+  backgroundImage: string | null;
   finish: FinishSpec;
-  exportRef: MutableRefObject<(() => void) | null>;
+  time: string;
+  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
   return (
@@ -527,7 +625,7 @@ export default function Scene({
       gl={{
         preserveDrawingBuffer: true,
         antialias: true,
-        alpha: false,
+        alpha: true,
         powerPreference: "high-performance",
       }}
       style={{ width: "100%", height: "100%", touchAction: "none" }}
@@ -543,9 +641,11 @@ export default function Scene({
           apertura={apertura}
           orientation={orientation}
           light={light}
-            background={background}
-            finish={finish}
-            exportRef={exportRef}
+          background={background}
+          backgroundImage={backgroundImage}
+          finish={finish}
+          time={time}
+          exportRef={exportRef}
           onInput={onInput}
         />
       </Suspense>

@@ -44,10 +44,10 @@ function publicError(error: unknown) {
   if (error instanceof CaptureError) return error.message;
   const message = error instanceof Error ? error.message : "";
   if (/memory|ENOMEM|heap|out of memory|killed/i.test(message)) {
-    return `Chromium se quedó sin memoria (${message})`;
+    return `Chromium ran out of memory (${message})`;
   }
-  if (message) return "No se pudo abrir esta página";
-  return "No se pudo abrir esta página";
+  if (message) return "Could not open this page";
+  return "Could not open this page";
 }
 
 function isBenign(url: string) {
@@ -194,7 +194,7 @@ async function show(session: Session, profile: ViewportProfile, url: string, rel
   }
 
   const page = session.page;
-  if (!page) throw new Error("sin página");
+  if (!page) throw new Error("no page");
   session.url = url;
   session.profile = profile;
 
@@ -292,7 +292,7 @@ export function attachLiveSocket(ws: WebSocket) {
     if (session.closed || isBinary) return;
     const parsed = parseClientMessage(data.toString());
     if (!parsed) {
-      send(ws, { type: "error", message: "Petición no válida" });
+      send(ws, { type: "error", message: "Invalid request" });
       return;
     }
     bumpIdle(session);
@@ -305,7 +305,7 @@ export function attachLiveSocket(ws: WebSocket) {
           const target = await assertPublicUrl(parsed.url);
           const profile = profileForViewport(parsed.width, parsed.height);
           if (!profile) {
-            send(ws, { type: "error", message: "Tamaño de pantalla no permitido" });
+            send(ws, { type: "error", message: "Screen size is not allowed" });
             return;
           }
           await show(session, profile, target.toString(), true);
@@ -314,7 +314,7 @@ export function attachLiveSocket(ws: WebSocket) {
         if (parsed.type === "resize") {
           const profile = profileForViewport(parsed.width, parsed.height);
           if (!profile || !session.url) {
-            send(ws, { type: "error", message: "Tamaño de pantalla no permitido" });
+            send(ws, { type: "error", message: "Screen size is not allowed" });
             return;
           }
           await show(session, profile, session.url, false);

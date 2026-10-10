@@ -88,25 +88,25 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   try {
     url = new URL(normalized);
   } catch {
-    throw new CaptureError(400, "URL no válida");
+    throw new CaptureError(400, "Invalid URL");
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new CaptureError(400, "Solo se permiten direcciones http o https");
+    throw new CaptureError(400, "Only http or https addresses are allowed");
   }
 
   if (url.username || url.password) {
-    throw new CaptureError(400, "Esa dirección no está permitida");
+    throw new CaptureError(400, "That address is not allowed");
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   if (isBlockedHostname(hostname)) {
-    throw new CaptureError(400, "Esa dirección no está permitida");
+    throw new CaptureError(400, "That address is not allowed");
   }
 
   if (isIP(hostname)) {
     if (isBlockedIp(hostname)) {
-      throw new CaptureError(400, "Esa dirección no está permitida");
+      throw new CaptureError(400, "That address is not allowed");
     }
     return url;
   }
@@ -115,11 +115,11 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   try {
     records = await lookup(hostname, { all: true, verbatim: true });
   } catch {
-    throw new CaptureError(400, "No se pudo resolver esa dirección");
+    throw new CaptureError(400, "Could not resolve that address");
   }
 
   if (records.length === 0 || records.some((record) => isBlockedIp(record.address))) {
-    throw new CaptureError(400, "Esa dirección no está permitida");
+    throw new CaptureError(400, "That address is not allowed");
   }
 
   return url;

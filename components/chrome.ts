@@ -1,4 +1,5 @@
 import type { DeviceSpec, ScreenStatus } from "@/lib/devices";
+import { isComputer, landscapeStatusPx } from "@/lib/devices";
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -126,32 +127,95 @@ function drawBattery(context: CanvasRenderingContext2D, x: number, y: number, sc
   context.fillRect(x + 1.6 * scale, y - h / 2 + 1.5 * scale, w * 0.62, h - 3 * scale);
 }
 
+function fontFamily() {
+  return getComputedStyle(document.body).fontFamily || "Inter, sans-serif";
+}
+
+function drawStatusIcons(
+  context: CanvasRenderingContext2D,
+  right: number,
+  mid: number,
+  scale: number,
+) {
+  drawBattery(context, right - 27 * scale, mid, scale);
+  drawWifi(context, right - 46 * scale, mid + 1 * scale, scale);
+  drawSignal(context, right - 78 * scale, mid + 5 * scale, scale);
+}
+
 function drawStatusBar(
   context: CanvasRenderingContext2D,
   device: DeviceSpec,
   cssWidth: number,
   scale: number,
   ink: string,
+  time: string,
 ) {
   if (device.topInset <= 0) return;
-  const family = getComputedStyle(document.body).fontFamily || "Inter, sans-serif";
   const bandH = device.topInset * scale;
   context.fillStyle = ink;
   context.strokeStyle = ink;
   context.textBaseline = "middle";
   context.textAlign = "left";
-  context.font = `600 ${15 * scale}px ${family}`;
-  const time = new Intl.DateTimeFormat("es-ES", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date());
+  context.font = `600 ${15 * scale}px ${fontFamily()}`;
   context.fillText(time, 22 * scale, bandH / 2);
 
   const right = cssWidth * scale - 16 * scale;
-  const mid = bandH / 2;
-  drawBattery(context, right - 27 * scale, mid, scale);
-  drawWifi(context, right - 46 * scale, mid + 1 * scale, scale);
-  drawSignal(context, right - 78 * scale, mid + 5 * scale, scale);
+  drawStatusIcons(context, right, bandH / 2, scale);
+}
+
+/** Visual top of a landscape phone is the portrait right edge. Text reads left to right after the device turns. */
+function drawLandscapeStatus(
+  context: CanvasRenderingContext2D,
+  device: DeviceSpec,
+  cssWidth: number,
+  cssHeight: number,
+  scale: number,
+  ink: string,
+  time: string,
+) {
+  const statusPx = landscapeStatusPx(device);
+  if (statusPx <= 0) return;
+  const band = statusPx * scale;
+  const barLen = cssHeight * scale;
+  const x0 = cssWidth * scale - band;
+  context.save();
+  context.beginPath();
+  context.rect(x0, 0, band, barLen);
+  context.clip();
+  context.fillStyle = ink;
+  context.strokeStyle = ink;
+  context.translate(x0 + band / 2, 0);
+  context.rotate(Math.PI / 2);
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.font = `600 ${13 * scale}px ${fontFamily()}`;
+  context.fillText(time, 22 * scale, 0);
+  drawStatusIcons(context, barLen - 16 * scale, 0, scale);
+  context.restore();
+}
+
+function drawMenuBar(
+  context: CanvasRenderingContext2D,
+  device: DeviceSpec,
+  cssWidth: number,
+  scale: number,
+  ink: string,
+  time: string,
+) {
+  if (device.topInset <= 0) return;
+  const bandH = device.topInset * scale;
+  const family = fontFamily();
+  context.fillStyle = ink;
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.font = `500 ${13 * scale}px ${family}`;
+  let x = 18 * scale;
+  for (const label of ["File", "Edit", "View"]) {
+    context.fillText(label, x, bandH / 2);
+    x += context.measureText(label).width + 18 * scale;
+  }
+  context.textAlign = "right";
+  context.fillText(time, cssWidth * scale - 18 * scale, bandH / 2);
 }
 
 function drawHomeIndicator(
@@ -220,6 +284,7 @@ export function paintScreen(
   cssWidth = device.width,
   cssHeight = device.height,
   orientation: "portrait" | "landscape" = "portrait",
+  time = "9:41",
 ) {
   const scale = 2;
   const width = Math.max(2, Math.round(cssWidth * scale));
@@ -229,10 +294,16 @@ export function paintScreen(
   const context = canvas.getContext("2d");
   if (!context) return;
 
-  const top = device.topInset * scale;
+  const landscape = orientation === "landscape" && !isComputer(device);
+  const sideTop = landscape && device.cutout === "none" ? 0 : device.topInset;
+  const statusPx = landscape ? landscapeStatusPx(device) : 0;
+  const top = sideTop * scale;
   const bottom = device.bottomInset * scale;
-  const contentH = height - top - bottom;
-  const wide = cssWidth / Math.max(1, cssHeight) > 1.05;
+  const statusBand = statusPx * scale;
+  const pageW = width - statusBand;
+  const pageH = height - top - bottom;
+  const splitMessage = device.id === "iphone-duo" && cssWidth / Math.max(1, cssHeight) > 1.05;
+  const messageWidth = splitMessage ? width / 2 : pageW;
   let topColor = FALLBACK;
   let bottomColor = FALLBACK;
   let drewFrame = false;
@@ -246,36 +317,56 @@ export function paintScreen(
     }
   }
 
-  context.fillStyle = rgb(topColor);
-  context.fillRect(0, 0, width, top);
-  context.fillStyle = rgb(bottomColor);
-  context.fillRect(0, height - bottom, width, bottom);
-  context.fillStyle = "#f7f7f7";
-  context.fillRect(0, top, width, contentH);
-
-  const messageWidth = wide ? width / 2 : width;
-  if (drewFrame && frame) {
-    try {
-      if (orientation === "landscape") {
-        drawLandscape(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
-      } else {
-        drawContain(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
-      }
-    } catch {
-      drawMessage(context, status, message, 0, top, messageWidth, contentH);
-    }
-  } else if (orientation === "landscape") {
-    context.save();
-    context.translate(width / 2, top + contentH / 2);
-    context.rotate(Math.PI / 2);
-    drawMessage(context, status, message, -contentH / 2, -messageWidth / 2, contentH, messageWidth);
-    context.restore();
-  } else {
-    drawMessage(context, status, message, 0, top, messageWidth, contentH);
-  }
-
   const ink = isDark(topColor) ? "#f5f5f5" : "#111111";
   const homeInk = isDark(bottomColor) ? "rgba(245,245,245,0.92)" : "rgba(17,17,17,0.88)";
-  drawStatusBar(context, device, cssWidth, scale, ink);
+
+  if (top > 0) {
+    context.fillStyle = rgb(topColor);
+    context.fillRect(0, 0, width, top);
+  }
+  if (bottom > 0) {
+    context.fillStyle = rgb(bottomColor);
+    context.fillRect(0, height - bottom, width, bottom);
+  }
+  if (statusBand > 0) {
+    context.fillStyle = rgb(topColor);
+    context.fillRect(pageW, 0, statusBand, height);
+  }
+  context.fillStyle = "#f7f7f7";
+  context.fillRect(0, top, pageW, pageH);
+
+  if (drewFrame && frame) {
+    try {
+      if (landscape) {
+        drawLandscape(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
+      } else {
+        drawContain(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
+      }
+    } catch {
+      drawMessage(context, status, message, 0, top, messageWidth, pageH);
+    }
+  } else if (landscape) {
+    context.save();
+    context.translate(pageW / 2, top + pageH / 2);
+    context.rotate(Math.PI / 2);
+    drawMessage(context, status, message, -pageH / 2, -messageWidth / 2, pageH, messageWidth);
+    context.restore();
+  } else {
+    drawMessage(context, status, message, 0, top, messageWidth, pageH);
+  }
+
+  if (isComputer(device)) {
+    const bar = isDark(topColor) ? "rgba(28,28,30,0.94)" : "rgba(246,246,246,0.96)";
+    context.fillStyle = bar;
+    context.fillRect(0, 0, width, device.topInset * scale);
+    drawMenuBar(context, device, cssWidth, scale, ink, time);
+    return;
+  }
+
+  if (landscape) {
+    drawLandscapeStatus(context, device, cssWidth, cssHeight, scale, ink, time);
+  } else {
+    drawStatusBar(context, device, cssWidth, scale, ink, time);
+  }
   drawHomeIndicator(context, device, cssWidth, cssHeight, scale, homeInk);
 }
