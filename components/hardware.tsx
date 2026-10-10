@@ -232,24 +232,49 @@ function layoutFor(rear: RearLayout) {
   );
 }
 
+/** Local bounds of each module, including a side flash and the bevel on the plate. */
+const MODULE_EXTENT: Record<RearLayout, { minX: number; maxX: number; minY: number; maxY: number }> = {
+  "iphone-14": { minX: -0.51, maxX: 0.51, minY: -0.51, maxY: 0.51 },
+  "iphone-15": { minX: -0.41, maxX: 0.64, minY: -0.79, maxY: 0.79 },
+  "iphone-16": { minX: -0.42, maxX: 0.67, minY: -0.89, maxY: 0.89 },
+  "iphone-16-pro": { minX: -0.75, maxX: 0.75, minY: -0.75, maxY: 0.75 },
+  "iphone-duo": { minX: -0.49, maxX: 0.75, minY: -0.92, maxY: 0.92 },
+  "ipad-pro": { minX: -0.63, maxX: 0.63, minY: -0.28, maxY: 0.28 },
+  "ipad-air": { minX: -0.26, maxX: 0.26, minY: -0.26, maxY: 0.26 },
+  ipad: { minX: -0.23, maxX: 0.23, minY: -0.23, maxY: 0.23 },
+  "ipad-mini": { minX: -0.41, maxX: 0.41, minY: -0.25, maxY: 0.25 },
+};
+
 export function RearModule({
   rear,
   bodyW,
   bodyH,
   depth,
+  radius,
 }: {
   rear: RearLayout;
   bodyW: number;
   bodyH: number;
   depth: number;
+  radius: number;
 }) {
-  const wide = rear === "ipad-pro" || rear === "ipad-air" || rear === "ipad" || rear === "ipad-mini";
-  const duo = rear === "iphone-duo";
-  const x = bodyW * (wide ? 0.34 : duo ? 0.18 : 0.22);
-  const y = bodyH * (wide ? 0.36 : duo ? 0.2 : 0.3);
+  const scale = rear === "iphone-duo" ? 0.72 : 1;
+  const box = MODULE_EXTENT[rear];
+  const minX = box.minX * scale;
+  const maxX = box.maxX * scale;
+  const minY = box.minY * scale;
+  const maxY = box.maxY * scale;
+  // The body's corner is an arc. Inset far enough that the module's outer corner stays on that arc.
+  const margin = Math.max(0.09, radius * 0.32);
+  const limitX = bodyW / 2 - margin;
+  const limitY = bodyH / 2 - margin;
+  let x = limitX - maxX;
+  let y = limitY - maxY;
+  if (x + minX < -limitX) x = -(minX + maxX) / 2;
+  if (y + minY < -limitY) y = -(minY + maxY) / 2;
   const z = -depth / 2 - 0.09;
   return (
-    <group position={[x, y, z]} rotation={[0, Math.PI, 0]} scale={duo ? 0.72 : 1}>
+    <group position={[x, y, z]} rotation={[0, Math.PI, 0]} scale={scale}>
       {layoutFor(rear)}
     </group>
   );
@@ -285,17 +310,20 @@ export function SideControls({
   color: string;
   edge?: "both" | "left" | "right";
 }) {
-  const left = -bodyW / 2 - 0.058;
-  const right = bodyW / 2 + 0.058;
+  // The side wall at mid-depth is the unbevelled silhouette, x = ±bodyW/2.
+  // Seat the bar so it bites the metal by a hair and the rest stands proud.
+  const overlap = 0.008;
+  const xAt = (side: -1 | 1, thickness: number) => side * (bodyW / 2 + thickness / 2 - overlap);
+  const yAt = (side: -1 | 1, thickness: number) => side * (bodyH / 2 + thickness / 2 - overlap);
   const top = bodyH * 0.32;
 
   if (layout === "ipad") {
     return (
       <group>
-        <Bar position={[right, top, 0]} size={[0.018, 0.22, 0.032]} color={color} />
-        <Bar position={[right, top - 0.32, 0]} size={[0.018, 0.22, 0.032]} color={color} />
-        <Bar position={[right, top - 0.78, 0]} size={[0.016, 0.16, 0.03]} color={color} />
-        <Bar position={[0, -bodyH / 2 - 0.004, 0]} size={[0.16, 0.012, 0.028]} color="#1a1c20" />
+        <Bar position={[xAt(1, 0.018), top, 0]} size={[0.018, 0.22, 0.032]} color={color} />
+        <Bar position={[xAt(1, 0.018), top - 0.32, 0]} size={[0.018, 0.22, 0.032]} color={color} />
+        <Bar position={[xAt(1, 0.016), top - 0.78, 0]} size={[0.016, 0.16, 0.03]} color={color} />
+        <Bar position={[0, yAt(-1, 0.012), 0]} size={[0.16, 0.012, 0.028]} color="#1a1c20" />
       </group>
     );
   }
@@ -303,10 +331,10 @@ export function SideControls({
   if (layout === "mini") {
     return (
       <group>
-        <Bar position={[left, top, 0]} size={[0.016, 0.2, 0.03]} color={color} />
-        <Bar position={[left, top - 0.28, 0]} size={[0.016, 0.2, 0.03]} color={color} />
-        <Bar position={[bodyW * 0.22, bodyH / 2 + 0.01, 0]} size={[0.18, 0.016, 0.03]} color={color} />
-        <Bar position={[0, -bodyH / 2 - 0.004, 0]} size={[0.14, 0.012, 0.026]} color="#1a1c20" />
+        <Bar position={[xAt(-1, 0.016), top, 0]} size={[0.016, 0.2, 0.03]} color={color} />
+        <Bar position={[xAt(-1, 0.016), top - 0.28, 0]} size={[0.016, 0.2, 0.03]} color={color} />
+        <Bar position={[bodyW * 0.22, yAt(1, 0.016), 0]} size={[0.18, 0.016, 0.03]} color={color} />
+        <Bar position={[0, yAt(-1, 0.012), 0]} size={[0.14, 0.012, 0.026]} color="#1a1c20" />
       </group>
     );
   }
@@ -316,36 +344,33 @@ export function SideControls({
       <group>
         {edge !== "right" ? (
           <>
-            <Bar position={[left, 0.55, 0]} size={[0.02, 0.26, 0.042]} color={color} />
-            <Bar position={[left, 0.18, 0]} size={[0.02, 0.26, 0.042]} color={color} />
+            <Bar position={[xAt(-1, 0.02), 0.55, 0]} size={[0.02, 0.26, 0.042]} color={color} />
+            <Bar position={[xAt(-1, 0.02), 0.18, 0]} size={[0.02, 0.26, 0.042]} color={color} />
           </>
         ) : null}
         {edge !== "left" ? (
-          <Bar position={[right, 0.42, 0]} size={[0.02, 0.38, 0.042]} color={color} />
+          <Bar position={[xAt(1, 0.02), 0.42, 0]} size={[0.02, 0.38, 0.042]} color={color} />
         ) : null}
       </group>
     );
   }
 
   const mute = layout === "switch";
+  const muteSize: [number, number, number] = mute ? [0.016, 0.12, 0.036] : [0.02, 0.22, 0.042];
   return (
     <group>
-      <Bar
-        position={[left, top + 0.15, 0]}
-        size={mute ? [0.016, 0.12, 0.036] : [0.02, 0.22, 0.042]}
-        color={color}
-      />
-      <Bar position={[left, top - 0.28, 0]} size={[0.02, 0.28, 0.044]} color={color} />
-      <Bar position={[left, top - 0.66, 0]} size={[0.02, 0.28, 0.044]} color={color} />
-      <Bar position={[right, top - 0.05, 0]} size={[0.02, 0.46, 0.044]} color={color} />
+      <Bar position={[xAt(-1, muteSize[0]), top + 0.15, 0]} size={muteSize} color={color} />
+      <Bar position={[xAt(-1, 0.02), top - 0.28, 0]} size={[0.02, 0.28, 0.044]} color={color} />
+      <Bar position={[xAt(-1, 0.02), top - 0.66, 0]} size={[0.02, 0.28, 0.044]} color={color} />
+      <Bar position={[xAt(1, 0.02), top - 0.05, 0]} size={[0.02, 0.46, 0.044]} color={color} />
       {layout === "action" ? (
-        <Bar position={[right, top - 1.15, 0]} size={[0.016, 0.52, 0.036]} color={color} />
+        <Bar position={[xAt(1, 0.016), top - 1.15, 0]} size={[0.016, 0.52, 0.036]} color={color} />
       ) : null}
-      <Bar position={[0, -bodyH / 2 - 0.006, 0]} size={[0.14, 0.014, 0.03]} color="#14161a" />
-      <Bar position={[left, -bodyH * 0.22, 0.02]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
-      <Bar position={[left, bodyH * 0.08, 0.02]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
-      <Bar position={[right, -bodyH * 0.22, 0.02]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
-      <Bar position={[right, bodyH * 0.08, 0.02]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
+      <Bar position={[0, yAt(-1, 0.014), 0]} size={[0.14, 0.014, 0.03]} color="#14161a" />
+      <Bar position={[xAt(-1, 0.008), -bodyH * 0.22, 0]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
+      <Bar position={[xAt(-1, 0.008), bodyH * 0.08, 0]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
+      <Bar position={[xAt(1, 0.008), -bodyH * 0.22, 0]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
+      <Bar position={[xAt(1, 0.008), bodyH * 0.08, 0]} size={[0.008, 0.14, 0.02]} color="#0c0d10" />
     </group>
   );
 }

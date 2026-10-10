@@ -67,6 +67,30 @@ function drawContain(
   context.drawImage(image, x + (width - dw) / 2, y + (height - dh) / 2, dw, dh);
 }
 
+/** Page top lands on the right of the portrait glass, which is visual up after the device turns. */
+function drawLandscape(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  imageWidth: number,
+  imageHeight: number,
+) {
+  context.save();
+  context.beginPath();
+  context.rect(x, y, width, height);
+  context.clip();
+  context.translate(x + width / 2, y + height / 2);
+  context.rotate(Math.PI / 2);
+  const scale = Math.min(height / imageWidth, width / imageHeight);
+  const dw = imageWidth * scale;
+  const dh = imageHeight * scale;
+  context.drawImage(image, -dw / 2, -dh / 2, dw, dh);
+  context.restore();
+}
+
 function drawSignal(context: CanvasRenderingContext2D, x: number, y: number, scale: number) {
   const barW = 3 * scale;
   const gap = 1.6 * scale;
@@ -195,6 +219,7 @@ export function paintScreen(
   message: string,
   cssWidth = device.width,
   cssHeight = device.height,
+  orientation: "portrait" | "landscape" = "portrait",
 ) {
   const scale = 2;
   const width = Math.max(2, Math.round(cssWidth * scale));
@@ -228,14 +253,25 @@ export function paintScreen(
   context.fillStyle = "#f7f7f7";
   context.fillRect(0, top, width, contentH);
 
+  const messageWidth = wide ? width / 2 : width;
   if (drewFrame && frame) {
     try {
-      drawContain(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
+      if (orientation === "landscape") {
+        drawLandscape(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
+      } else {
+        drawContain(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
+      }
     } catch {
-      drawMessage(context, status, message, 0, top, wide ? width / 2 : width, contentH);
+      drawMessage(context, status, message, 0, top, messageWidth, contentH);
     }
+  } else if (orientation === "landscape") {
+    context.save();
+    context.translate(width / 2, top + contentH / 2);
+    context.rotate(Math.PI / 2);
+    drawMessage(context, status, message, -contentH / 2, -messageWidth / 2, contentH, messageWidth);
+    context.restore();
   } else {
-    drawMessage(context, status, message, 0, top, wide ? width / 2 : width, contentH);
+    drawMessage(context, status, message, 0, top, messageWidth, contentH);
   }
 
   const ink = isDark(topColor) ? "#f5f5f5" : "#111111";

@@ -1,3 +1,5 @@
+import { WALLPAPER_BACKGROUNDS } from "./wallpapers";
+
 export type DeviceId =
   | "iphone-14"
   | "iphone-15"
@@ -300,18 +302,7 @@ export const BACKGROUNDS = [
   { id: "blanco", label: "Blanco", color: "#ffffff", css: "#ffffff" },
   { id: "niebla", label: "Niebla", color: "#e8e8e8", css: "#e8e8e8" },
   { id: "negro", label: "Negro", color: "#111111", css: "#111111" },
-  {
-    id: "vibrant-vista",
-    label: "Vibrant vista",
-    color: null,
-    css: "radial-gradient(90% 70% at 8% 58%, #ff2f86 0%, rgba(255,47,134,0) 58%), radial-gradient(80% 70% at 96% 42%, #ffb15c 0%, rgba(255,177,92,0) 55%), radial-gradient(70% 60% at 92% 6%, #d7f3ff 0%, rgba(215,243,255,0) 52%), radial-gradient(80% 60% at 38% 108%, #2a1570 0%, rgba(42,21,112,0) 62%), linear-gradient(128deg, #1480ff 0%, #3a4de8 30%, #ff4d6a 62%, #ffb15a 100%)",
-  },
-  {
-    id: "green-glory",
-    label: "Green glory",
-    color: null,
-    css: "radial-gradient(80% 70% at 0% 28%, #b6ff3c 0%, rgba(182,255,60,0) 46%), radial-gradient(90% 70% at 12% 58%, #00e85a 0%, rgba(0,232,90,0) 50%), radial-gradient(70% 60% at 100% 8%, #063a58 0%, rgba(6,58,88,0) 55%), radial-gradient(80% 70% at 78% 110%, #01080c 0%, rgba(1,8,12,0) 58%), radial-gradient(40% 50% at 100% 52%, #19d8ff 0%, rgba(25,216,255,0) 60%), linear-gradient(150deg, #00f0a0 0%, #00a878 42%, #02141c 100%)",
-  },
+  ...WALLPAPER_BACKGROUNDS,
 ] as const;
 
 export type BackgroundId = (typeof BACKGROUNDS)[number]["id"];
@@ -361,19 +352,34 @@ export function contentSize(device: DeviceSpec) {
   };
 }
 
-export function liveViewport(device: DeviceSpec, apertura: number) {
-  if (device.id === "iphone-duo") {
-    const screen = duoScreen(apertura);
-    return {
-      width: screen.width,
-      height: Math.max(1, screen.height - device.topInset - device.bottomInset),
-    };
+export type Orientation = "portrait" | "landscape";
+
+export function liveViewport(
+  device: DeviceSpec,
+  apertura: number,
+  orientation: Orientation = "portrait",
+) {
+  const portrait =
+    device.id === "iphone-duo"
+      ? {
+          width: duoScreen(apertura).width,
+          height: Math.max(1, duoScreen(apertura).height - device.topInset - device.bottomInset),
+        }
+      : contentSize(device);
+  if (orientation === "landscape") {
+    return { width: portrait.height, height: portrait.width };
   }
-  return contentSize(device);
+  return portrait;
 }
 
 function dsfFor(width: number, height: number) {
   return width * height > 600_000 ? 1 : 2;
+}
+
+function sameViewport(width: number, height: number, portraitW: number, portraitH: number) {
+  return (
+    (width === portraitW && height === portraitH) || (width === portraitH && height === portraitW)
+  );
 }
 
 export function profileForViewport(width: number, height: number): ViewportProfile | null {
@@ -384,8 +390,8 @@ export function profileForViewport(width: number, height: number): ViewportProfi
       const closed = liveViewport(device, 0);
       const open = liveViewport(device, 1);
       const match =
-        (width === closed.width && height === closed.height) ||
-        (width === open.width && height === open.height);
+        sameViewport(width, height, closed.width, closed.height) ||
+        sameViewport(width, height, open.width, open.height);
       if (!match) continue;
       return {
         width,
@@ -398,7 +404,7 @@ export function profileForViewport(width: number, height: number): ViewportProfi
       };
     }
     const content = contentSize(device);
-    if (content.width !== width || content.height !== height) continue;
+    if (!sameViewport(width, height, content.width, content.height)) continue;
     const tablet = device.kind === "tablet";
     return {
       width,

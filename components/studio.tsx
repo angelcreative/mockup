@@ -22,6 +22,7 @@ import {
   liveViewport,
   type BackgroundId,
   type DeviceId,
+  type Orientation,
   type ScreenState,
 } from "@/lib/devices";
 import type { LiveServerMessage } from "@/lib/live-protocol";
@@ -49,6 +50,7 @@ export function Studio() {
   const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
   const [light, setLight] = useState(1);
   const [apertura, setApertura] = useState(0);
+  const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [screen, setScreen] = useState<ScreenState>(EMPTY_SCREEN);
   const [frame, setFrame] = useState<ImageBitmap | null>(null);
   const exportRef = useRef<(() => void) | null>(null);
@@ -57,7 +59,7 @@ export function Studio() {
   const sentSize = useRef("");
   const device = deviceById(deviceId);
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
-  const viewport = liveViewport(device, apertura);
+  const viewport = liveViewport(device, apertura, orientation);
   const loading = screen.status === "loading";
 
   function rememberFrame(next: ImageBitmap | null) {
@@ -256,6 +258,7 @@ export function Studio() {
             screen={screen}
             frame={frame}
             apertura={apertura}
+            orientation={orientation}
             light={light}
             background={background}
             finish={finish}
@@ -298,22 +301,43 @@ export function Studio() {
               </div>
               <div className="flex flex-col gap-2">
                 <span className="text-[13px] text-neutral-500">Fondo</span>
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="flex max-h-36 flex-col gap-1 overflow-y-auto pr-0.5">
                   {BACKGROUNDS.map((item) => (
                     <Button
                       key={item.id}
                       type="button"
                       variant={background === item.id ? "default" : "outline"}
-                      className="h-8 justify-start gap-1.5 border-[#ebebeb] px-2 text-[13px]"
+                      className="h-8 w-full shrink-0 justify-start gap-1.5 border-[#ebebeb] px-2 text-[13px]"
                       onClick={() => setBackground(item.id)}
                     >
                       <span
                         className="size-3.5 shrink-0 rounded-full border border-black/10"
                         style={{ background: item.css }}
                       />
-                      {item.label}
+                      <span className="truncate">{item.label}</span>
                     </Button>
                   ))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-[13px] text-neutral-500">Orientación</span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Button
+                    type="button"
+                    variant={orientation === "portrait" ? "default" : "outline"}
+                    className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                    onClick={() => setOrientation("portrait")}
+                  >
+                    Vertical
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={orientation === "landscape" ? "default" : "outline"}
+                    className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                    onClick={() => setOrientation("landscape")}
+                  >
+                    Horizontal
+                  </Button>
                 </div>
               </div>
               <label className="flex flex-col gap-2">

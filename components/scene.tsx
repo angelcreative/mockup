@@ -5,7 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
-import type { BackgroundId, DeviceSpec, FinishSpec, ScreenState } from "@/lib/devices";
+import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
 import { BACKGROUNDS, duoScreen, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
 import { paintScreen } from "@/components/chrome";
@@ -60,6 +60,7 @@ function useDeviceTexture(
   message: string,
   clock: number,
   apertura: number,
+  orientation: Orientation,
 ) {
   const canvas = useState(() => document.createElement("canvas"))[0];
   const leftCanvas = useState(() => document.createElement("canvas"))[0];
@@ -81,6 +82,7 @@ function useDeviceTexture(
       message,
       bounds.width,
       bounds.height,
+      orientation,
     );
     copyPanel(canvas, leftCanvas, bounds.split ? "left" : "full");
     copyPanel(canvas, rightCanvas, bounds.split ? "right" : "full");
@@ -96,6 +98,7 @@ function useDeviceTexture(
     leftCanvas,
     leftTexture,
     message,
+    orientation,
     rightCanvas,
     rightTexture,
     status,
@@ -114,107 +117,34 @@ function useDeviceTexture(
   return { texture, leftTexture, rightTexture };
 }
 
-function radial(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  inner: number,
-  outer: number,
-  stops: ReadonlyArray<readonly [number, string]>,
-) {
-  const gradient = context.createRadialGradient(x, y, inner, x, y, outer);
-  for (const [offset, color] of stops) gradient.addColorStop(offset, color);
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, width, height);
-}
-
-function paintWallpaper(background: BackgroundId) {
+function cssBackgroundTexture(css: string) {
+  const width = 1280;
+  const height = 720;
   const canvas = document.createElement("canvas");
-  canvas.width = 960;
-  canvas.height = 540;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
   if (!context) return texture;
-  const width = canvas.width;
-  const height = canvas.height;
-  if (background === "vibrant-vista") {
-    const base = context.createLinearGradient(0, 0, width, height);
-    base.addColorStop(0, "#1480ff");
-    base.addColorStop(0.3, "#3a4de8");
-    base.addColorStop(0.62, "#ff4d6a");
-    base.addColorStop(1, "#ffb15a");
-    context.fillStyle = base;
-    context.fillRect(0, 0, width, height);
-    radial(context, width, height, width * 0.92, height * 0.06, 12, width * 0.55, [
-      [0, "#d7f3ff"],
-      [0.42, "#7ecfff"],
-      [1, "rgba(126,207,255,0)"],
-    ]);
-    radial(context, width, height, width * 0.08, height * 0.58, 16, width * 0.72, [
-      [0, "#ff2f86"],
-      [0.38, "#ff4d55"],
-      [1, "rgba(255,77,85,0)"],
-    ]);
-    radial(context, width, height, width * 0.96, height * 0.42, 20, width * 0.7, [
-      [0, "#ffb15c"],
-      [0.48, "#ff8a6a"],
-      [1, "rgba(255,138,106,0)"],
-    ]);
-    radial(context, width, height, width * 0.35, height * 1.02, 10, width * 0.7, [
-      [0, "#2a1570"],
-      [0.45, "#6a3fd0"],
-      [1, "rgba(106,63,208,0)"],
-    ]);
-    radial(context, width, height, width, height, 8, width * 0.42, [
-      [0, "#3aa0ff"],
-      [1, "rgba(58,160,255,0)"],
-    ]);
-  } else {
-    const base = context.createLinearGradient(0, 0, width, height);
-    base.addColorStop(0, "#00f0a0");
-    base.addColorStop(0.42, "#00a878");
-    base.addColorStop(1, "#02141c");
-    context.fillStyle = base;
-    context.fillRect(0, 0, width, height);
-    radial(context, width, height, 0, height * 0.28, 10, width * 0.62, [
-      [0, "#b6ff3c"],
-      [0.34, "#00e85a"],
-      [1, "rgba(0,232,90,0)"],
-    ]);
-    radial(context, width, height, width * 0.16, height * 0.55, 8, width * 0.78, [
-      [0, "#00ff6a"],
-      [0.4, "#00c878"],
-      [1, "rgba(0,200,120,0)"],
-    ]);
-    radial(context, width, height, width, height * 0.12, 10, width * 0.5, [
-      [0, "#063a58"],
-      [1, "rgba(6,58,88,0)"],
-    ]);
-    radial(context, width, height, width * 0.75, height * 1.05, 10, width * 0.65, [
-      [0, "#01080c"],
-      [0.55, "#042430"],
-      [1, "rgba(4,36,48,0)"],
-    ]);
-    radial(context, width, height, width, height * 0.55, 8, width * 0.34, [
-      [0, "#19d8ff"],
-      [1, "rgba(25,216,255,0)"],
-    ]);
-  }
-  texture.needsUpdate = true;
+  const safe = css.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;background:${safe}"></div></foreignObject></svg>`;
+  const image = new Image();
+  image.onload = () => {
+    context.drawImage(image, 0, 0, width, height);
+    texture.needsUpdate = true;
+  };
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   return texture;
 }
 
 function SceneBackground({ background }: { background: BackgroundId }) {
-  const textured = background === "vibrant-vista" || background === "green-glory";
-  const texture = useMemo(
-    () => (textured ? paintWallpaper(background) : null),
-    [background, textured],
-  );
+  const spec = BACKGROUNDS.find((item) => item.id === background) ?? BACKGROUNDS[0];
+  const painted = spec.color === null ? spec.css : null;
+  const texture = useMemo(() => (painted ? cssBackgroundTexture(painted) : null), [painted]);
 
   useEffect(() => () => texture?.dispose(), [texture]);
 
@@ -222,8 +152,7 @@ function SceneBackground({ background }: { background: BackgroundId }) {
     return <primitive attach="background" object={texture} />;
   }
 
-  const color = BACKGROUNDS.find((item) => item.id === background)?.color ?? "#ffffff";
-  return <color attach="background" args={[color]} />;
+  return <color attach="background" args={[spec.color ?? "#ffffff"]} />;
 }
 
 function SoftShadow({ y, strength, width }: { y: number; strength: number; width: number }) {
@@ -331,19 +260,21 @@ function readHit(object: THREE.Object3D) {
 function ScreenPointer({
   viewportWidth,
   viewportHeight,
+  orientation,
   onInput,
 }: {
   viewportWidth: number;
   viewportHeight: number;
+  orientation: Orientation;
   onInput: (input: ScreenInput) => void;
 }) {
   const { camera, gl, scene, controls } = useThree();
   const onInputRef = useRef(onInput);
-  const sizeRef = useRef({ viewportWidth, viewportHeight });
+  const sizeRef = useRef({ viewportWidth, viewportHeight, orientation });
 
   useEffect(() => {
     onInputRef.current = onInput;
-    sizeRef.current = { viewportWidth, viewportHeight };
+    sizeRef.current = { viewportWidth, viewportHeight, orientation };
   });
 
   useEffect(() => {
@@ -381,6 +312,7 @@ function ScreenPointer({
         },
         sizeRef.current.viewportWidth,
         sizeRef.current.viewportHeight,
+        sizeRef.current.orientation,
       );
       return { css, onGlass: true as const };
     }
@@ -482,6 +414,7 @@ function Stage({
   screen,
   frame,
   apertura,
+  orientation,
   light,
   background,
   finish,
@@ -492,6 +425,7 @@ function Stage({
   screen: ScreenState;
   frame: ImageBitmap | null;
   apertura: number;
+  orientation: Orientation;
   light: number;
   background: BackgroundId;
   finish: FinishSpec;
@@ -511,10 +445,11 @@ function Stage({
     screen.message,
     clock,
     apertura,
+    orientation,
   );
-  const viewport = liveViewport(device, apertura);
+  const viewport = liveViewport(device, apertura, orientation);
   const span = deviceSpan(device, apertura);
-  const foot = deviceFoot(device);
+  const foot = deviceFoot(device, orientation, apertura);
 
   return (
     <>
@@ -526,15 +461,17 @@ function Stage({
       <directionalLight position={[3.4, 5.2, 4.2]} intensity={1.25 * light} />
       <directionalLight position={[-3.2, 2.4, 2.2]} intensity={0.38 * light} />
       <directionalLight position={[-1.6, 3.2, -5.4]} intensity={0.9 * light} />
-      <DeviceModel
-        device={device}
-        texture={texture}
-        leftTexture={leftTexture}
-        rightTexture={rightTexture}
-        status={screen.status}
-        apertura={apertura}
-        finish={finish}
-      />
+      <group rotation={[0, 0, orientation === "landscape" ? Math.PI / 2 : 0]}>
+        <DeviceModel
+          device={device}
+          texture={texture}
+          leftTexture={leftTexture}
+          rightTexture={rightTexture}
+          status={screen.status}
+          apertura={apertura}
+          finish={finish}
+        />
+      </group>
       <SoftShadow
         y={-foot / 2 - 0.012}
         strength={0.9 * Math.min(Math.max(light, 0), 1.3)}
@@ -553,6 +490,7 @@ function Stage({
       <ScreenPointer
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
+        orientation={orientation}
         onInput={onInput}
       />
     </>
@@ -564,6 +502,7 @@ export default function Scene({
   screen,
   frame,
   apertura,
+  orientation,
   light,
   background,
   finish,
@@ -574,6 +513,7 @@ export default function Scene({
   screen: ScreenState;
   frame: ImageBitmap | null;
   apertura: number;
+  orientation: Orientation;
   light: number;
   background: BackgroundId;
   finish: FinishSpec;
@@ -601,6 +541,7 @@ export default function Scene({
           screen={screen}
           frame={frame}
           apertura={apertura}
+          orientation={orientation}
           light={light}
             background={background}
             finish={finish}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import type { DeviceSpec, FinishSpec, ScreenStatus } from "@/lib/devices";
+import type { DeviceSpec, FinishSpec, Orientation, ScreenStatus } from "@/lib/devices";
 import {
   DUO_BODY,
   DUO_CM,
@@ -185,7 +185,13 @@ function Slab({
           depth={frame.depth}
         />
       )}
-      <RearModule rear={device.rear} bodyW={frame.bodyW} bodyH={frame.bodyH} depth={frame.depth} />
+      <RearModule
+        rear={device.rear}
+        bodyW={frame.bodyW}
+        bodyH={frame.bodyH}
+        depth={frame.depth}
+        radius={frame.radius}
+      />
       <SideControls
         layout={device.buttons}
         bodyW={frame.bodyW}
@@ -286,14 +292,15 @@ function DuoMesh({
         <mesh geometry={body}>
           <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
         </mesh>
-        <mesh
-          geometry={innerGlass}
-          position={[innerShift, 0, zFront]}
-          userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
-        >
-          <meshBasicMaterial color={open ? "#ffffff" : "#050506"} map={open ? leftTexture : null} toneMapped={false} />
+          <mesh
+            geometry={innerGlass}
+            position={[innerShift, 0, zFront]}
+            visible={open}
+            userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
+          >
+          <meshBasicMaterial map={leftTexture} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
-        <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} />
+        <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} radius={radius} />
         <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="left" />
         {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
       </group>
@@ -305,16 +312,18 @@ function DuoMesh({
           <mesh
             geometry={innerGlass}
             position={[-innerShift, 0, zFront]}
+            visible={open}
             userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
           >
-            <meshBasicMaterial color={open ? "#ffffff" : "#050506"} map={open ? rightTexture : null} toneMapped={false} />
+            <meshBasicMaterial map={rightTexture} toneMapped={false} side={THREE.DoubleSide} />
           </mesh>
           <group position={[0, 0, -zFront]} rotation={[0, Math.PI, 0]}>
             <mesh
               geometry={outerGlass}
+              visible={!open}
               userData={hitData("single", DUO_OUTER_WIDTH, DUO_OUTER_HEIGHT, !open)}
             >
-              <meshBasicMaterial color={open ? "#050506" : "#ffffff"} map={open ? null : texture} toneMapped={false} />
+              <meshBasicMaterial map={texture} toneMapped={false} side={THREE.DoubleSide} />
             </mesh>
             {open ? null : (
               <mesh geometry={island} position={[0, islandY, 0.01]}>
@@ -376,8 +385,21 @@ export function deviceSpan(device: DeviceSpec, apertura: number) {
   return frameSize(device.width, device.height, profile).bodyH;
 }
 
-export function deviceFoot(device: DeviceSpec) {
-  if (device.id === "iphone-duo") return DUO_BODY.height * DUO_CM;
+export function deviceFoot(
+  device: DeviceSpec,
+  orientation: Orientation = "portrait",
+  apertura = 0,
+) {
+  if (device.id === "iphone-duo") {
+    const vertical =
+      orientation === "landscape"
+        ? isDuoOpen(apertura)
+          ? DUO_BODY.openWidth
+          : DUO_BODY.closedWidth
+        : DUO_BODY.height;
+    return vertical * DUO_CM;
+  }
   const profile = device.kind === "tablet" ? "tablet" : "phone";
-  return frameSize(device.width, device.height, profile).bodyH;
+  const frame = frameSize(device.width, device.height, profile);
+  return orientation === "landscape" ? frame.bodyW : frame.bodyH;
 }
