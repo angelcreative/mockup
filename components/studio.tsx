@@ -411,8 +411,8 @@ export function Studio() {
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-end justify-between gap-3 p-4 sm:p-6">
-          <div className="pointer-events-auto max-h-[min(72vh,640px)] w-full max-w-[280px] overflow-y-auto rounded-xl border border-[#ebebeb] bg-white p-4">
-            <div className="flex flex-col gap-4">
+          <div className="pointer-events-auto flex max-h-[min(72vh,640px)] w-full max-w-[280px] flex-col rounded-xl border border-[#ebebeb] bg-white">
+            <div className="flex flex-col gap-4 overflow-y-auto p-4">
               <div className="flex flex-col gap-2">
                 <span className="text-[13px] text-neutral-500">
                   Finish <span className="text-neutral-950">· {finish.label}</span>
@@ -626,6 +626,17 @@ export function Studio() {
                 </label>
               ) : null}
             </div>
+            <p className="px-4 pb-3 text-[11px] text-neutral-400">
+              By{" "}
+              <a
+                href="https://www.linkedin.com/in/angelsanchezcaceres/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-neutral-400 hover:text-neutral-500"
+              >
+                @angelcreative
+              </a>
+            </p>
           </div>
           <div className="pointer-events-auto w-full max-w-[220px] rounded-xl border border-[#ebebeb] bg-white p-3">
             <span className="text-[13px] text-neutral-500">Save image</span>
