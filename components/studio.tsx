@@ -140,6 +140,10 @@ export function Studio() {
       const bytes = event.data as ArrayBuffer;
       createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
         .then((bitmap) => {
+          if (bitmap.width < 1 || bitmap.height < 1) {
+            bitmap.close();
+            return;
+          }
           if (socketRef.current !== socket) {
             bitmap.close();
             return;
@@ -293,7 +297,7 @@ export function Studio() {
                   aria-label="Luz"
                 />
               </label>
-              {deviceId === "fold" ? (
+              {deviceId === "iphone-duo" ? (
                 <label className="flex flex-col gap-2">
                   <span className="flex items-center justify-between text-[13px]">
                     <span className="text-neutral-500">Apertura</span>

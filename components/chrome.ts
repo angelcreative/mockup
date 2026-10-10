@@ -105,6 +105,7 @@ function drawBattery(context: CanvasRenderingContext2D, x: number, y: number, sc
 function drawStatusBar(
   context: CanvasRenderingContext2D,
   device: DeviceSpec,
+  cssWidth: number,
   scale: number,
   ink: string,
 ) {
@@ -122,7 +123,7 @@ function drawStatusBar(
   }).format(new Date());
   context.fillText(time, 22 * scale, bandH / 2);
 
-  const right = device.width * scale - 16 * scale;
+  const right = cssWidth * scale - 16 * scale;
   const mid = bandH / 2;
   drawBattery(context, right - 27 * scale, mid, scale);
   drawWifi(context, right - 46 * scale, mid + 1 * scale, scale);
@@ -132,15 +133,17 @@ function drawStatusBar(
 function drawHomeIndicator(
   context: CanvasRenderingContext2D,
   device: DeviceSpec,
+  cssWidth: number,
+  cssHeight: number,
   scale: number,
   ink: string,
 ) {
   if (device.bottomInset <= 0) return;
-  const width = (device.kind === "tablet" ? device.width * 0.13 : Math.min(134, device.width * 0.34)) * scale;
+  const width = (device.kind === "tablet" ? cssWidth * 0.13 : Math.min(134, cssWidth * 0.34)) * scale;
   const height = 5 * scale;
   const fromBottom = (device.kind === "tablet" ? 7 : 10) * scale;
-  const x = (device.width * scale - width) / 2;
-  const y = device.height * scale - fromBottom - height;
+  const x = (cssWidth * scale - width) / 2;
+  const y = cssHeight * scale - fromBottom - height;
   context.fillStyle = ink;
   roundRect(context, x, y, width, height, height / 2);
   context.fill();
@@ -190,37 +193,21 @@ export function paintScreen(
   frameHeight: number,
   status: ScreenStatus,
   message: string,
+  cssWidth = device.width,
+  cssHeight = device.height,
 ) {
   const scale = 2;
-  const width = Math.max(2, Math.round(device.id === "fold" ? frameWidth || device.width : device.width * scale));
-  const height = Math.max(
-    2,
-    Math.round(device.id === "fold" ? frameHeight || device.height : device.height * scale),
-  );
+  const width = Math.max(2, Math.round(cssWidth * scale));
+  const height = Math.max(2, Math.round(cssHeight * scale));
   if (canvas.width !== width) canvas.width = width;
   if (canvas.height !== height) canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) return;
 
-  if (device.id === "fold") {
-    context.fillStyle = "#f3f3f3";
-    context.fillRect(0, 0, width, height);
-    if (frame && frameWidth > 0 && frameHeight > 0) {
-      try {
-        context.drawImage(frame, 0, 0, width, height);
-      } catch {
-        drawMessage(context, status, message, 0, 0, width / (width / height > 0.62 ? 2 : 1), height);
-      }
-    } else {
-      const panels = width / height > 0.62 ? 2 : 1;
-      drawMessage(context, status, message, 0, 0, width / panels, height);
-    }
-    return;
-  }
-
   const top = device.topInset * scale;
   const bottom = device.bottomInset * scale;
   const contentH = height - top - bottom;
+  const wide = cssWidth / Math.max(1, cssHeight) > 1.05;
   let topColor = FALLBACK;
   let bottomColor = FALLBACK;
   let drewFrame = false;
@@ -245,14 +232,14 @@ export function paintScreen(
     try {
       drawContain(context, frame, 0, top, width, contentH, frameWidth, frameHeight);
     } catch {
-      drawMessage(context, status, message, 0, top, width, contentH);
+      drawMessage(context, status, message, 0, top, wide ? width / 2 : width, contentH);
     }
   } else {
-    drawMessage(context, status, message, 0, top, width, contentH);
+    drawMessage(context, status, message, 0, top, wide ? width / 2 : width, contentH);
   }
 
   const ink = isDark(topColor) ? "#f5f5f5" : "#111111";
   const homeInk = isDark(bottomColor) ? "rgba(245,245,245,0.92)" : "rgba(17,17,17,0.88)";
-  drawStatusBar(context, device, scale, ink);
-  drawHomeIndicator(context, device, scale, homeInk);
+  drawStatusBar(context, device, cssWidth, scale, ink);
+  drawHomeIndicator(context, device, cssWidth, cssHeight, scale, homeInk);
 }

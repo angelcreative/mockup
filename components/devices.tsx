@@ -5,7 +5,17 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { DeviceSpec, ScreenStatus } from "@/lib/devices";
-import { FOLD_PANEL_WIDTH, ISLAND_POINTS, NOTCH_POINTS, isFoldOpen } from "@/lib/devices";
+import {
+  DUO_BODY,
+  DUO_CM,
+  DUO_INNER_HEIGHT,
+  DUO_INNER_WIDTH,
+  DUO_OUTER_HEIGHT,
+  DUO_OUTER_WIDTH,
+  ISLAND_POINTS,
+  NOTCH_POINTS,
+  isDuoOpen,
+} from "@/lib/devices";
 import {
   frameSize,
   roundedBodyGeometry,
@@ -20,6 +30,7 @@ const FINISH = {
   titanium: { color: "#8d8a83", metalness: 0.62, roughness: 0.36 },
   silver: { color: "#d7d7dc", metalness: 0.58, roughness: 0.32 },
   starlight: { color: "#e4dccd", metalness: 0.46, roughness: 0.4 },
+  cielo: { color: "#1a2433", metalness: 0.72, roughness: 0.34 },
 } as const;
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
@@ -228,143 +239,176 @@ function Slab({
   );
 }
 
-function FoldPanel({
-  texture,
-  panel,
-  body,
-  screen,
-  depth,
-  bodyW,
-  buttons,
-  status,
-  interactive,
-}: {
-  texture: THREE.Texture;
-  panel: "left" | "right";
-  body: THREE.BufferGeometry;
-  screen: THREE.BufferGeometry;
-  depth: number;
-  bodyW: number;
-  buttons: "left" | "right" | "both";
-  status: ScreenStatus;
-  interactive: boolean;
-}) {
+function hitData(
+  panel: "single" | "left" | "right",
+  screenWidth: number,
+  screenHeight: number,
+  interactive: boolean,
+) {
+  return {
+    screen: interactive,
+    panel,
+    screenWidth,
+    screenHeight,
+    topInset: 59,
+    bottomInset: 34,
+  };
+}
 
-  const finish = FINISH.black;
-  const zFront = depth / 2 + 0.01;
-
+function RearCameras({ bodyW, bodyH, depth }: { bodyW: number; bodyH: number; depth: number }) {
   return (
-    <group>
-      <mesh geometry={body}>
-        <meshStandardMaterial
-          color={finish.color}
-          metalness={finish.metalness}
-          roughness={finish.roughness}
-        />
+    <group position={[-bodyW * 0.2, bodyH * 0.22, -depth / 2 - 0.1]} rotation={[0, Math.PI, 0]}>
+      <mesh>
+        <boxGeometry args={[1.05, 2.05, 0.09]} />
+        <meshStandardMaterial color="#2c3544" metalness={0.62} roughness={0.32} />
       </mesh>
-      <mesh
-        geometry={screen}
-        position={[0, 0, zFront]}
-        userData={{
-          ...screenUserData(
-            {
-              id: "fold",
-              label: "Fold",
-              width: 768,
-              height: 874,
-              cutout: "none",
-              finish: "black",
-              kind: "fold",
-              topInset: 0,
-              bottomInset: 0,
-              camera: "none",
-            },
-            panel,
-            FOLD_PANEL_WIDTH,
-          ),
-          screen: interactive,
-        }}
-      >
-        <meshBasicMaterial map={texture} toneMapped={false} />
+      {[0.46, -0.46].map((y) => (
+        <group key={y} position={[0, y, 0.05]}>
+          <mesh>
+            <circleGeometry args={[0.34, 32]} />
+            <meshStandardMaterial color="#0c1016" metalness={0.5} roughness={0.22} />
+          </mesh>
+          <mesh position={[0, 0, 0.01]}>
+            <circleGeometry args={[0.2, 28]} />
+            <meshStandardMaterial color="#05070b" metalness={0.8} roughness={0.12} />
+          </mesh>
+          <mesh position={[0.07, 0.07, 0.016]}>
+            <circleGeometry args={[0.045, 12]} />
+            <meshBasicMaterial color="#d5e8ff" />
+          </mesh>
+        </group>
+      ))}
+      <mesh position={[0.34, -0.9, 0.05]}>
+        <circleGeometry args={[0.09, 20]} />
+        <meshStandardMaterial color="#f7f1e6" metalness={0.15} roughness={0.4} />
       </mesh>
-      <SideButtons bodyW={bodyW} color={finish.color} side={buttons} />
-      {status === "loading" && panel === "left" ? (
-        <ScreenSpinner position={[0, 0.15, zFront + 0.02]} />
-      ) : null}
     </group>
   );
 }
 
-function FoldMesh({
+function DuoMesh({
+  texture,
   leftTexture,
   rightTexture,
   status,
   apertura,
 }: {
+  texture: THREE.Texture;
   leftTexture: THREE.Texture;
   rightTexture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
 }) {
-  const frame = useMemo(() => frameSize(FOLD_PANEL_WIDTH, 874), []);
-  const depth = frame.depth * 0.72;
+  const bodyW = DUO_BODY.closedWidth * DUO_CM;
+  const bodyH = DUO_BODY.height * DUO_CM;
+  const depth = DUO_BODY.openDepth * DUO_CM;
+  const radius = 0.46 * DUO_CM;
+  const outerW = (1398 / 460) * 2.54 * DUO_CM;
+  const outerH = (2034 / 460) * 2.54 * DUO_CM;
+  const innerH = (1878 / 430) * 2.54 * DUO_CM;
+  const innerHalfW = ((2670 / 430) * 2.54 * DUO_CM) / 2;
+  const open = isDuoOpen(apertura);
+  const finish = FINISH.cielo;
+
   const body = useDisposable(
     useMemo(
-      () => roundedBodyGeometry(frame.bodyW, frame.bodyH, depth, frame.radius * 0.92),
-      [frame.bodyW, frame.bodyH, depth, frame.radius],
+      () => roundedBodyGeometry(bodyW, bodyH, depth, radius),
+      [bodyW, bodyH, depth, radius],
     ),
   );
-  const screen = useDisposable(
+  const innerGlass = useDisposable(
     useMemo(
-      () =>
-        roundedRectGeometry(
-          frame.screenW,
-          frame.screenH,
-          Math.max(0.08, frame.radius - 0.1),
-        ),
-      [frame.screenW, frame.screenH, frame.radius],
+      () => roundedRectGeometry(innerHalfW, innerH, Math.max(0.05, radius * 0.72)),
+      [innerHalfW, innerH, radius],
     ),
+  );
+  const outerGlass = useDisposable(
+    useMemo(
+      () => roundedRectGeometry(outerW, outerH, Math.max(0.05, radius * 0.72)),
+      [outerW, outerH, radius],
+    ),
+  );
+  const island = useDisposable(
+    useMemo(() => {
+      const height = (open ? innerH : outerH) * (ISLAND_POINTS.height / (open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT));
+      const width = (open ? innerHalfW * 2 : outerW) * (ISLAND_POINTS.width / (open ? DUO_INNER_WIDTH : DUO_OUTER_WIDTH));
+      return roundedRectGeometry(width, height, height / 2);
+    }, [innerH, innerHalfW, open, outerH, outerW]),
   );
 
-  const open = isFoldOpen(apertura);
-  const gap = 0.11 * apertura;
-  const centerShift = ((frame.bodyW + gap) / 2) * (1 - apertura);
-  const leftButtons = open ? "left" : "both";
+  // ExtrudeGeometry's bevel makes the shell thicker than `depth` on the back face.
+  const zFront = depth / 2 + 0.08;
+  const gap = 0.012 * apertura;
+  const centerShift = (bodyW / 2) * (1 - apertura);
+  const innerShift = (bodyW - innerHalfW) / 2 + 0.04;
+  const screenH = open ? innerH : outerH;
+  const cssH = open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT;
+  const islandH = screenH * (ISLAND_POINTS.height / cssH);
+  const islandY = screenH / 2 - screenH * (ISLAND_POINTS.top / cssH) - islandH / 2;
+  const hingeMetal = "#c5ccd4";
 
   return (
     <group position={[centerShift, 0, 0]}>
-      <mesh visible={apertura > 0.05} position={[0, 0, 0.02]}>
-        <cylinderGeometry args={[0.048, 0.048, frame.bodyH * 0.97, 24]} />
-        <meshStandardMaterial color="#0c0c0e" metalness={0.74} roughness={0.28} />
+      <mesh visible={apertura > 0.04} position={[0, 0, -0.01]}>
+        <cylinderGeometry args={[0.04, 0.04, bodyH * 0.98, 28]} />
+        <meshStandardMaterial color={hingeMetal} metalness={0.86} roughness={0.24} />
       </mesh>
-      <group position={[-frame.bodyW / 2 - gap / 2, 0, 0]}>
-        <FoldPanel
-          texture={leftTexture}
-          panel="left"
-          body={body}
-          screen={screen}
-          depth={depth}
-          bodyW={frame.bodyW}
-          buttons={leftButtons}
-          status={status}
-          interactive
-        />
+      <group position={[-bodyW / 2, 0, 0]}>
+        <mesh geometry={body}>
+          <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
+        </mesh>
+        <mesh
+          geometry={innerGlass}
+          position={[innerShift, 0, zFront]}
+          visible={open}
+          userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
+        >
+          <meshBasicMaterial map={leftTexture} toneMapped={false} />
+        </mesh>
+        <RearCameras bodyW={bodyW} bodyH={bodyH} depth={depth} />
+        <SideButtons bodyW={bodyW} color={finish.color} side="left" />
+        {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
       </group>
-      <group rotation={[0, (1 - apertura) * Math.PI, 0]}>
-        <group position={[frame.bodyW / 2 + gap / 2, 0, depth * 1.25 * (1 - apertura)]}>
-          <FoldPanel
-            texture={rightTexture}
-            panel="right"
-            body={body}
-            screen={screen}
-            depth={depth}
-            bodyW={frame.bodyW}
-            buttons="right"
-            status={status}
-            interactive={apertura > 0.08}
-          />
+      <group position={[0, 0, 0]} rotation={[0, (1 - apertura) * Math.PI, 0]}>
+        <group position={[bodyW / 2 + gap, 0, -(depth + 0.02) * (1 - apertura)]}>
+          <mesh geometry={body}>
+            <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
+          </mesh>
+          <mesh
+            geometry={innerGlass}
+            position={[-innerShift, 0, zFront]}
+            visible={open}
+            userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
+          >
+            <meshBasicMaterial map={rightTexture} toneMapped={false} />
+          </mesh>
+          <group position={[0, 0, -zFront]} rotation={[0, Math.PI, 0]}>
+            <mesh
+              geometry={outerGlass}
+              visible={!open}
+              userData={hitData("single", DUO_OUTER_WIDTH, DUO_OUTER_HEIGHT, !open)}
+            >
+              <meshBasicMaterial color="#ffffff" map={open ? null : texture} toneMapped={false} />
+            </mesh>
+            {open ? null : (
+              <mesh geometry={island} position={[0, islandY, 0.01]}>
+                <meshBasicMaterial color="#050505" />
+              </mesh>
+            )}
+          </group>
+          <SideButtons bodyW={bodyW} color={finish.color} side="right" />
+          <mesh position={[bodyW / 2 + 0.012, -0.15, 0]}>
+            <boxGeometry args={[0.02, 0.22, 0.04]} />
+            <meshStandardMaterial color={hingeMetal} metalness={0.7} roughness={0.3} />
+          </mesh>
+          {status === "loading" && !open ? <ScreenSpinner position={[0, 0.1, -zFront - 0.02]} /> : null}
         </group>
       </group>
+      {open ? (
+        <mesh geometry={island} position={[0, islandY, zFront + 0.01]}>
+          <meshBasicMaterial color="#050505" />
+        </mesh>
+      ) : null}
     </group>
   );
 }
@@ -384,9 +428,10 @@ export function DeviceModel({
   status: ScreenStatus;
   apertura: number;
 }) {
-  if (device.id === "fold") {
+  if (device.id === "iphone-duo") {
     return (
-      <FoldMesh
+      <DuoMesh
+        texture={texture}
         leftTexture={leftTexture}
         rightTexture={rightTexture}
         status={status}
@@ -398,16 +443,16 @@ export function DeviceModel({
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
-  if (device.id === "fold") {
-    const frame = frameSize(FOLD_PANEL_WIDTH, 874);
-    return isFoldOpen(apertura) ? frame.bodyW * 2 + 0.2 : frame.bodyW;
+  if (device.id === "iphone-duo") {
+    const width = (isDuoOpen(apertura) ? DUO_BODY.openWidth : DUO_BODY.closedWidth) * DUO_CM;
+    return Math.max(width, DUO_BODY.height * DUO_CM);
   }
   const profile = device.kind === "tablet" ? "tablet" : "phone";
   return frameSize(device.width, device.height, profile).bodyH;
 }
 
 export function deviceFoot(device: DeviceSpec) {
-  if (device.id === "fold") return frameSize(FOLD_PANEL_WIDTH, 874).bodyH;
+  if (device.id === "iphone-duo") return DUO_BODY.height * DUO_CM;
   const profile = device.kind === "tablet" ? "tablet" : "phone";
   return frameSize(device.width, device.height, profile).bodyH;
 }

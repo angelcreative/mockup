@@ -6,7 +6,7 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, ScreenState } from "@/lib/devices";
-import { BACKGROUNDS, liveViewport } from "@/lib/devices";
+import { BACKGROUNDS, duoScreen, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
 import { paintScreen } from "@/components/chrome";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
@@ -19,7 +19,28 @@ function makeCanvasTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  // CanvasTexture marks itself dirty immediately. The default canvas is 300×150, so drop that
+  // version and upload only after the canvas matches the frame.
+  texture.version = 0;
+  texture.source.version = 0;
   return texture;
+}
+
+function publishTexture(texture: THREE.CanvasTexture, canvas: HTMLCanvasElement) {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width < 1 || height < 1) return;
+  const uploaded = texture.userData as { glWidth?: number; glHeight?: number };
+  if (uploaded.glWidth !== width || uploaded.glHeight !== height) {
+    // texStorage2D cannot grow. A later texSubImage2D of a larger JPEG overflows.
+    if (uploaded.glWidth !== undefined) texture.dispose();
+    uploaded.glWidth = width;
+    uploaded.glHeight = height;
+  }
+  texture.needsUpdate = true;
 }
 
 function copyPanel(source: HTMLCanvasElement, target: HTMLCanvasElement, mode: "full" | "left" | "right") {
@@ -48,25 +69,24 @@ function useDeviceTexture(
   const rightTexture = useMemo(() => makeCanvasTexture(rightCanvas), [rightCanvas]);
 
   useLayoutEffect(() => {
-    const viewport = liveViewport(device, apertura);
+    if (frame && (frame.width < 1 || frame.height < 1)) return;
+    const bounds = device.id === "iphone-duo" ? duoScreen(apertura) : { width: device.width, height: device.height, split: false };
     paintScreen(
       canvas,
       device,
       frame,
-      frame?.width || viewport.width,
-      frame?.height || viewport.height,
+      frame?.width ?? 0,
+      frame?.height ?? 0,
       status,
       message,
+      bounds.width,
+      bounds.height,
     );
-    const wide = canvas.width / Math.max(1, canvas.height) > 0.62;
-    copyPanel(canvas, leftCanvas, wide ? "left" : "full");
-    copyPanel(canvas, rightCanvas, wide ? "right" : "full");
-    // Three.js uploads a canvas only when this flag is set, after the pixels are painted.
-    /* eslint-disable react-hooks/immutability */
-    texture.needsUpdate = true;
-    leftTexture.needsUpdate = true;
-    rightTexture.needsUpdate = true;
-    /* eslint-enable react-hooks/immutability */
+    copyPanel(canvas, leftCanvas, bounds.split ? "left" : "full");
+    copyPanel(canvas, rightCanvas, bounds.split ? "right" : "full");
+    publishTexture(texture, canvas);
+    publishTexture(leftTexture, leftCanvas);
+    publishTexture(rightTexture, rightCanvas);
   }, [
     apertura,
     canvas,
@@ -413,7 +433,6 @@ function Stage({
     apertura,
   );
   const viewport = liveViewport(device, apertura);
-  const frameWide = frame ? frame.width / Math.max(1, frame.height) > 0.62 : false;
   const span = deviceSpan(device, apertura);
   const foot = deviceFoot(device);
 
@@ -436,7 +455,7 @@ function Stage({
       <SoftShadow
         y={-foot / 2 - 0.012}
         strength={0.9 * Math.min(Math.max(light, 0), 1.3)}
-        width={device.id === "fold" && frameWide ? 5.4 : 3.6}
+        width={device.id === "iphone-duo" && isDuoOpen(apertura) ? 6.2 : 3.6}
       />
       <OrbitControls
         makeDefault

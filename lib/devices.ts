@@ -3,7 +3,7 @@ export type DeviceId =
   | "iphone-15"
   | "iphone-16"
   | "iphone-16-pro"
-  | "fold"
+  | "iphone-duo"
   | "ipad-pro-13"
   | "ipad-pro-11"
   | "ipad-air-13"
@@ -13,9 +13,9 @@ export type DeviceId =
 
 export type Cutout = "notch" | "island" | "none";
 
-export type Finish = "midnight" | "black" | "graphite" | "titanium" | "silver" | "starlight";
+export type Finish = "midnight" | "black" | "graphite" | "titanium" | "silver" | "starlight" | "cielo";
 
-export type DeviceKind = "phone" | "tablet" | "fold";
+export type DeviceKind = "phone" | "tablet" | "duo";
 
 export type CameraEdge = "none" | "top" | "right";
 
@@ -32,10 +32,23 @@ export type DeviceSpec = {
   camera: CameraEdge;
 };
 
-export const FOLD_PANEL_WIDTH = 384;
-export const FOLD_OPEN_WIDTH = 768;
-export const FOLD_HEIGHT = 874;
-export const FOLD_OPEN_AT = 0.02;
+/** CSS points. Apple lists 1.398×2.034 px at 460 ppi and 1.878×2.670 px at 430 ppi. */
+export const DUO_OUTER_WIDTH = 466;
+export const DUO_OUTER_HEIGHT = 678;
+export const DUO_INNER_WIDTH = 890;
+export const DUO_INNER_HEIGHT = 626;
+export const DUO_TOP_INSET = 59;
+export const DUO_BOTTOM_INSET = 34;
+export const DUO_OPEN_AT = 0.02;
+/** Centimetres from apple.com/es/iphone-duo/specs, used to proportion the mesh. */
+export const DUO_CM = 0.325;
+export const DUO_BODY = {
+  closedWidth: 8.41,
+  openWidth: 16.46,
+  height: 11.78,
+  closedDepth: 1.13,
+  openDepth: 0.52,
+} as const;
 
 export const ISLAND_POINTS = { width: 126, height: 37, top: 11 };
 export const NOTCH_POINTS = { width: 162, height: 33 };
@@ -45,9 +58,6 @@ const IPHONE_UA =
 
 const IPAD_UA =
   "Mozilla/5.0 (iPad; CPU OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1";
-
-const FOLD_UA =
-  "Mozilla/5.0 (Linux; Android 15; Pixel Fold) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
 
 export const DEVICES: readonly DeviceSpec[] = [
   {
@@ -99,15 +109,15 @@ export const DEVICES: readonly DeviceSpec[] = [
     camera: "none",
   },
   {
-    id: "fold",
-    label: "Fold",
-    width: FOLD_OPEN_WIDTH,
-    height: FOLD_HEIGHT,
-    cutout: "none",
-    finish: "black",
-    kind: "fold",
-    topInset: 0,
-    bottomInset: 0,
+    id: "iphone-duo",
+    label: "iPhone Duo",
+    width: DUO_OUTER_WIDTH,
+    height: DUO_OUTER_HEIGHT,
+    cutout: "island",
+    finish: "cielo",
+    kind: "duo",
+    topInset: DUO_TOP_INSET,
+    bottomInset: DUO_BOTTOM_INSET,
     camera: "none",
   },
   {
@@ -220,8 +230,15 @@ export function deviceById(id: DeviceId): DeviceSpec {
   return device;
 }
 
-export function isFoldOpen(apertura: number) {
-  return apertura > FOLD_OPEN_AT;
+export function isDuoOpen(apertura: number) {
+  return apertura > DUO_OPEN_AT;
+}
+
+export function duoScreen(apertura: number) {
+  if (isDuoOpen(apertura)) {
+    return { width: DUO_INNER_WIDTH, height: DUO_INNER_HEIGHT, split: true as const };
+  }
+  return { width: DUO_OUTER_WIDTH, height: DUO_OUTER_HEIGHT, split: false as const };
 }
 
 export function contentSize(device: DeviceSpec) {
@@ -232,10 +249,11 @@ export function contentSize(device: DeviceSpec) {
 }
 
 export function liveViewport(device: DeviceSpec, apertura: number) {
-  if (device.id === "fold") {
+  if (device.id === "iphone-duo") {
+    const screen = duoScreen(apertura);
     return {
-      width: isFoldOpen(apertura) ? FOLD_OPEN_WIDTH : FOLD_PANEL_WIDTH,
-      height: FOLD_HEIGHT,
+      width: screen.width,
+      height: Math.max(1, screen.height - device.topInset - device.bottomInset),
     };
   }
   return contentSize(device);
@@ -248,23 +266,24 @@ function dsfFor(width: number, height: number) {
 export function profileForViewport(width: number, height: number): ViewportProfile | null {
   if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
 
-  if (
-    (width === FOLD_PANEL_WIDTH || width === FOLD_OPEN_WIDTH) &&
-    height === FOLD_HEIGHT
-  ) {
-    return {
-      width,
-      height,
-      userAgent: FOLD_UA,
-      platform: "Linux armv8l",
-      mobile: true,
-      dsf: dsfFor(width, height),
-      kind: "fold",
-    };
-  }
-
   for (const device of DEVICES) {
-    if (device.id === "fold") continue;
+    if (device.id === "iphone-duo") {
+      const closed = liveViewport(device, 0);
+      const open = liveViewport(device, 1);
+      const match =
+        (width === closed.width && height === closed.height) ||
+        (width === open.width && height === open.height);
+      if (!match) continue;
+      return {
+        width,
+        height,
+        userAgent: IPHONE_UA,
+        platform: "iPhone",
+        mobile: true,
+        dsf: dsfFor(width, height),
+        kind: "duo",
+      };
+    }
     const content = contentSize(device);
     if (content.width !== width || content.height !== height) continue;
     const tablet = device.kind === "tablet";
