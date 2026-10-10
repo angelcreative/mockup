@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: mockup
+    runtime: node
+    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
