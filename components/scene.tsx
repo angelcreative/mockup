@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, type MutableRefObject } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { ContactShadows, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, ScreenState } from "@/lib/devices";
@@ -92,6 +92,41 @@ function SceneBackground({ background }: { background: BackgroundId }) {
   return <color attach="background" args={[color]} />;
 }
 
+function SoftShadow({ y, strength }: { y: number; strength: number }) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext("2d");
+    const map = new THREE.CanvasTexture(canvas);
+    if (!context) return map;
+    const gradient = context.createRadialGradient(256, 256, 30, 256, 256, 250);
+    gradient.addColorStop(0, "rgba(0,0,0,0.5)");
+    gradient.addColorStop(0.32, "rgba(0,0,0,0.2)");
+    gradient.addColorStop(0.68, "rgba(0,0,0,0.05)");
+    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 512, 512);
+    map.needsUpdate = true;
+    return map;
+  }, []);
+
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0.05]}>
+      <planeGeometry args={[3.4, 1.5]} />
+      <meshBasicMaterial
+        map={texture}
+        transparent
+        depthWrite={false}
+        opacity={Math.min(Math.max(strength, 0), 1)}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
 function ExportBridge({
   exportRef,
 }: {
@@ -162,14 +197,7 @@ function Stage({
         status={screen.status}
         apertura={apertura}
       />
-      <ContactShadows
-        position={[0, -bodyH / 2 - 0.03, 0]}
-        opacity={0.34 * Math.min(light, 1.4)}
-        scale={12}
-        blur={2.5}
-        far={3.4}
-        color="#000000"
-      />
+      <SoftShadow y={-bodyH / 2 - 0.012} strength={0.9 * Math.min(Math.max(light, 0), 1.3)} />
       <OrbitControls
         makeDefault
         enablePan={false}
