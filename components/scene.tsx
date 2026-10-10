@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
@@ -571,6 +571,56 @@ function ScreenPointer({
   return null;
 }
 
+function Turntable({ enabled }: { enabled: boolean }) {
+  const controls = useThree((state) => state.controls) as {
+    autoRotate: boolean;
+    autoRotateSpeed: number;
+  } | null;
+  const gl = useThree((state) => state.gl);
+  const invalidate = useThree((state) => state.invalidate);
+  const speed = useRef(0);
+  const pointers = useRef(0);
+  const enabledRef = useRef(enabled);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+    invalidate();
+  }, [enabled, invalidate]);
+
+  useEffect(() => {
+    const dom = gl.domElement;
+    const down = () => {
+      pointers.current += 1;
+      invalidate();
+    };
+    const up = () => {
+      pointers.current = Math.max(0, pointers.current - 1);
+      invalidate();
+    };
+    dom.addEventListener("pointerdown", down);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      dom.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [gl, invalidate]);
+
+  useFrame((_, delta) => {
+    if (!controls) return;
+    const target = enabledRef.current && pointers.current === 0 ? 1 : 0;
+    const next = speed.current + (target - speed.current) * (1 - Math.exp(-2.8 * delta));
+    const settled = Math.abs(target - next) < 0.003;
+    speed.current = settled ? target : next;
+    controls.autoRotate = speed.current > 0.003;
+    controls.autoRotateSpeed = 1.6 * speed.current;
+    if (!settled || speed.current > 0.003) invalidate();
+  }, -2);
+
+  return null;
+}
+
 function Stage({
   device,
   screen,
@@ -582,6 +632,8 @@ function Stage({
   backgroundImage,
   finish,
   time,
+  autoRotate,
+  logoLight,
   exportRef,
   onInput,
 }: {
@@ -595,6 +647,8 @@ function Stage({
   backgroundImage: string | null;
   finish: FinishSpec;
   time: string;
+  autoRotate: boolean;
+  logoLight: boolean;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
@@ -636,6 +690,7 @@ function Stage({
           status={screen.status}
           apertura={apertura}
           finish={finish}
+          logoLight={logoLight}
         />
       </group>
       <SoftShadow
@@ -650,9 +705,12 @@ function Stage({
         dampingFactor={0.08}
         minDistance={7}
         maxDistance={26}
-        minPolarAngle={Math.PI / 8}
-        maxPolarAngle={Math.PI * 0.82}
+        minPolarAngle={0}
+        maxPolarAngle={Math.PI}
+        minAzimuthAngle={-Infinity}
+        maxAzimuthAngle={Infinity}
       />
+      <Turntable enabled={autoRotate} />
       <ScreenPointer
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
@@ -674,6 +732,8 @@ export default function Scene({
   backgroundImage,
   finish,
   time,
+  autoRotate,
+  logoLight,
   exportRef,
   onInput,
 }: {
@@ -687,6 +747,8 @@ export default function Scene({
   backgroundImage: string | null;
   finish: FinishSpec;
   time: string;
+  autoRotate: boolean;
+  logoLight: boolean;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
@@ -718,6 +780,8 @@ export default function Scene({
           backgroundImage={backgroundImage}
           finish={finish}
           time={time}
+          autoRotate={autoRotate}
+          logoLight={logoLight}
           exportRef={exportRef}
           onInput={onInput}
         />

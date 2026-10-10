@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import type { DeviceSpec, FinishSpec, ScreenStatus } from "@/lib/devices";
+import { AppleLogo } from "@/components/logo";
 import { roundedBodyGeometry, roundedRectGeometry, roundedRectShape, topNotchGeometry } from "@/components/geometry";
 
 const LAPTOP_SCALE = 0.2;
@@ -437,12 +438,14 @@ export function LaptopMesh({
   texture,
   apertura,
   finish,
+  logoLight,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
   finish: FinishSpec;
+  logoLight: boolean;
 }) {
   const layout = macLayout(device, Math.min(1, Math.max(0, apertura)));
   const dark = luminance(finish.color) < 140;
@@ -524,6 +527,13 @@ export function LaptopMesh({
         <mesh geometry={notchGeo} rotation={[Math.PI / 2, 0, 0]} position={[0, -0.008, notchZ]}>
           <meshBasicMaterial color="#0a0a0c" />
         </mesh>
+        <AppleLogo
+          size={Math.min(layout.w, layout.d) * 0.16}
+          position={[0, layout.lid + Math.min(0.03, layout.lid * 0.2) + 0.006, (layout.d * 0.992) / 2]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          lit={logoLight}
+          finish={finish.color}
+        />
         <group position={[0, -0.012, notchZ]}>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
             <circleGeometry args={[0.045, 24]} />
@@ -543,11 +553,13 @@ export function ImacMesh({
   device,
   texture,
   finish,
+  logoLight,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
   status: ScreenStatus;
   finish: FinishSpec;
+  logoLight: boolean;
 }) {
   const layout = imacLayout(device);
   const body = useDisposable(
@@ -596,6 +608,12 @@ export function ImacMesh({
       <mesh geometry={body} position={[0, panelY, 0]}>
         <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
       </mesh>
+      <AppleLogo
+        size={layout.panelW * 0.09}
+        position={[0, panelY, -(layout.thick / 2 + Math.min(0.03, layout.thick * 0.2) + 0.01)]}
+        lit={logoLight}
+        finish={finish.color}
+      />
       <mesh geometry={bezel} position={[0, panelY + bezelY, zFront]}>
         <meshStandardMaterial color="#0c0c0e" roughness={0.4} metalness={0.15} />
       </mesh>

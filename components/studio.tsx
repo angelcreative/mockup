@@ -41,6 +41,32 @@ const EMPTY_SCREEN: ScreenState = {
 
 const DEFAULT_URL = "https://www.apple.com";
 
+function ToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[13px] text-neutral-500">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full ${checked ? "bg-neutral-950" : "bg-neutral-200"}`}
+      >
+        <span className={`absolute top-0.5 size-4 rounded-full bg-white ${checked ? "left-4" : "left-0.5"}`} />
+      </button>
+    </div>
+  );
+}
+
 const SOLID_BACKGROUNDS = BACKGROUNDS.filter(
   (item) => item.id === "blanco" || item.id === "niebla" || item.id === "negro",
 );
@@ -64,6 +90,8 @@ export function Studio() {
   const [useCustom, setUseCustom] = useState(false);
   const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
   const [light, setLight] = useState(1);
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [logoLight, setLogoLight] = useState(false);
   const [apertura, setApertura] = useState(0);
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [time, setTime] = useState("9:41");
@@ -315,6 +343,8 @@ export function Studio() {
             backgroundImage={useCustom ? customBg : null}
             finish={finish}
             time={time || "9:41"}
+            autoRotate={autoRotate}
+            logoLight={logoLight}
             exportRef={exportRef}
             onInput={sendInput}
           />
@@ -438,6 +468,8 @@ export function Studio() {
                   );
                 })}
               </div>
+              <ToggleRow label="Auto-rotate" checked={autoRotate} onChange={setAutoRotate} />
+              <ToggleRow label="Logo light" checked={logoLight} onChange={setLogoLight} />
               {handheld ? (
                 <div className="flex flex-col gap-2">
                   <span className="text-[13px] text-neutral-500">Orientation</span>

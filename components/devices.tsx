@@ -24,6 +24,7 @@ import {
   topNotchGeometry,
 } from "@/components/geometry";
 import { RearModule, SideControls } from "@/components/hardware";
+import { AppleLogo } from "@/components/logo";
 import { ImacMesh, LaptopMesh, macFoot, macSpan } from "@/components/macs";
 import { landscapeStatusPx } from "@/lib/devices";
 
@@ -103,16 +104,23 @@ function screenUserData(
   };
 }
 
+function backFace(depth: number) {
+  const bevel = Math.min(0.03, depth * 0.2);
+  return -(depth / 2 + bevel + 0.008);
+}
+
 function Slab({
   device,
   texture,
   status,
   finish,
+  logoLight,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
   status: ScreenStatus;
   finish: FinishSpec;
+  logoLight: boolean;
 }) {
   const profile = device.kind === "tablet" ? "tablet" : "phone";
   const frame = useMemo(
@@ -200,6 +208,12 @@ function Slab({
         depth={frame.depth}
         radius={frame.radius}
       />
+      <AppleLogo
+        size={Math.min(frame.bodyW, frame.bodyH) * (profile === "tablet" ? 0.16 : 0.22)}
+        position={[0, 0, backFace(frame.depth)]}
+        lit={logoLight}
+        finish={finish.color}
+      />
       <SideControls
         layout={device.buttons}
         bodyW={frame.bodyW}
@@ -238,6 +252,7 @@ function DuoMesh({
   status,
   apertura,
   finish,
+  logoLight,
 }: {
   texture: THREE.Texture;
   leftTexture: THREE.Texture;
@@ -245,6 +260,7 @@ function DuoMesh({
   status: ScreenStatus;
   apertura: number;
   finish: FinishSpec;
+  logoLight: boolean;
 }) {
   const bodyW = DUO_BODY.closedWidth * DUO_CM;
   const bodyH = DUO_BODY.height * DUO_CM;
@@ -334,6 +350,12 @@ function DuoMesh({
           </mesh>
         ) : null}
         <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} radius={radius} />
+        <AppleLogo
+          size={Math.min(bodyW, bodyH) * 0.16}
+          position={[0, 0, backFace(depth)]}
+          lit={logoLight}
+          finish={finish.color}
+        />
         <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="left" />
         {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
       </group>
@@ -388,6 +410,7 @@ export function DeviceModel({
   status,
   apertura,
   finish,
+  logoLight,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
@@ -396,6 +419,7 @@ export function DeviceModel({
   status: ScreenStatus;
   apertura: number;
   finish: FinishSpec;
+  logoLight: boolean;
 }) {
   if (device.id === "iphone-duo") {
     return (
@@ -406,6 +430,7 @@ export function DeviceModel({
         status={status}
         apertura={apertura}
         finish={finish}
+        logoLight={logoLight}
       />
     );
   }
@@ -417,13 +442,14 @@ export function DeviceModel({
         status={status}
         apertura={apertura}
         finish={finish}
+        logoLight={logoLight}
       />
     );
   }
   if (device.kind === "desktop") {
-    return <ImacMesh device={device} texture={texture} status={status} finish={finish} />;
+    return <ImacMesh device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
   }
-  return <Slab device={device} texture={texture} status={status} finish={finish} />;
+  return <Slab device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
