@@ -160,16 +160,58 @@ type PlacedKey = {
   w: number;
   d: number;
   role: KeyRole;
+  label: string;
 };
 
 const KEY_ROWS: (number | null)[][] = [
-  [1, null, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.28],
+  [1, null, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.15],
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5],
-  [1.42, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.22],
-  [1.68, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.82],
-  [1.85, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.05, 1],
-  [1.12, 1.1, 1.15, 1.25, 4.35, 1.18, 1.02, 1, 1, 1],
+  [1.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.25],
+  [1.75, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.85],
+  [2.15, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.35, 1],
+  [1.15, 1.15, 1.2, 1.3, 4.7, 1.3, 1.15, 1, 1, 1],
 ];
+
+const KEY_LEGENDS: (string | null)[][] = [
+  ["esc", null, "☀", "☾", "□", "⌕", "♪", "◐", "◀", "▶", "»", "○", "−", "+", ""],
+  ["`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "del"],
+  ["tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "[", "]", "\\"],
+  ["caps", "A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'", "return"],
+  ["shift", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "shift", "↑"],
+  ["fn", "ctrl", "opt", "cmd", "", "cmd", "opt", "←", "↓", "→"],
+];
+
+function makeLegendTexture(layout: ReturnType<typeof layoutKeys>, dark: boolean) {
+  if (typeof document === "undefined") return null;
+  const px = 1100;
+  const width = Math.max(64, Math.ceil(layout.well.w * px));
+  const height = Math.max(64, Math.ceil(layout.well.d * px));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = dark ? "rgba(236, 238, 242, 0.94)" : "rgba(210, 212, 216, 0.92)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const originX = layout.well.x - layout.well.w / 2;
+  const originZ = layout.well.z - layout.well.d / 2;
+  for (const key of layout.keys) {
+    if (!key.label) continue;
+    const cx = ((key.x - originX) / layout.well.w) * width;
+    const cy = ((key.z - originZ) / layout.well.d) * height;
+    const longest = key.label.length > 3;
+    const size = Math.max(11, Math.min(key.w, key.d) * px * (longest ? 0.22 : 0.46));
+    ctx.font = `600 ${size}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillText(key.label, cx, cy);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  texture.needsUpdate = true;
+  return texture;
+}
 
 function keyCapGeometry(width: number, depth: number, height: number) {
   const radius = Math.min(width, depth) * 0.22;
@@ -217,7 +259,14 @@ function layoutKeys(width: number, depth: number, pro: boolean, wide: boolean) {
       if (cell !== null) {
         const role: KeyRole =
           rowIndex === 5 && cell > 3 ? "space" : rowIndex === 0 && index === row.length - 1 ? "id" : "key";
-        placed.push({ x: x + span / 2, z, w: Math.max(0.02, span - gutter), d: keyD, role });
+        placed.push({
+          x: x + span / 2,
+          z,
+          w: Math.max(0.02, span - gutter),
+          d: keyD,
+          role,
+          label: KEY_LEGENDS[rowIndex]?.[index] ?? "",
+        });
         rowOf.push(rowIndex);
       }
       x += span;
@@ -246,6 +295,7 @@ function layoutKeys(width: number, depth: number, pro: boolean, wide: boolean) {
   const trackZ = palmStart + (palmEnd - palmStart) / 2;
 
   return {
+    keys: placed,
     regular,
     space,
     touchId,
@@ -320,6 +370,8 @@ function Keyboard({
     color.multiplyScalar(dark ? 1.12 : 0.8);
     return `#${color.getHexString()}`;
   }, [dark, finish]);
+  const legendMap = useMemo(() => makeLegendTexture(layout, dark), [dark, layout]);
+  useEffect(() => () => legendMap?.dispose(), [legendMap]);
 
   useLayoutEffect(() => {
     const mesh = keysRef.current;
@@ -359,6 +411,15 @@ function Keyboard({
             <meshStandardMaterial color={dark ? "#8e929a" : "#6d7076"} roughness={0.35} metalness={0.4} />
           </mesh>
         </group>
+      ) : null}
+      {legendMap ? (
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[layout.well.x, keyY + keyH / 2 + 0.0014, layout.well.z]}
+        >
+          <planeGeometry args={[layout.well.w, layout.well.d]} />
+          <meshBasicMaterial map={legendMap} transparent depthWrite={false} toneMapped={false} />
+        </mesh>
       ) : null}
       <mesh
         geometry={trackGeo}

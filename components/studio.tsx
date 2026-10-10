@@ -40,6 +40,15 @@ const EMPTY_SCREEN: ScreenState = {
 
 const DEFAULT_URL = "https://www.apple.com";
 
+const SOLID_BACKGROUNDS = BACKGROUNDS.filter(
+  (item) => item.id === "blanco" || item.id === "niebla" || item.id === "negro",
+);
+const GRADIENT_GROUPS = [
+  { label: "Kiln", items: BACKGROUNDS.filter((item) => item.id.startsWith("vibrant-vista-")) },
+  { label: "Laurel", items: BACKGROUNDS.filter((item) => item.id.startsWith("green-glory-")) },
+  { label: "Velvet", items: BACKGROUNDS.filter((item) => item.id.startsWith("deep-dusk-")) },
+];
+
 function socketUrl() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/api/live`;
@@ -310,11 +319,13 @@ export function Studio() {
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-end justify-between gap-3 p-4 sm:p-6">
-          <div className="pointer-events-auto w-full max-w-[280px] rounded-xl border border-[#ebebeb] bg-white p-4">
+          <div className="pointer-events-auto max-h-[min(72vh,640px)] w-full max-w-[280px] overflow-y-auto rounded-xl border border-[#ebebeb] bg-white p-4">
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Finish</span>
-                <div className="flex flex-wrap gap-1.5" role="listbox" aria-label="Finish">
+                <span className="text-[13px] text-neutral-500">
+                  Finish <span className="text-neutral-950">· {finish.label}</span>
+                </span>
+                <div className="flex flex-wrap gap-2 p-0.5" role="listbox" aria-label="Finish">
                   {device.finishes.map((item) => {
                     const selected = item.id === finish.id;
                     return (
@@ -325,23 +336,16 @@ export function Studio() {
                         aria-selected={selected}
                         aria-label={item.label}
                         onClick={() => setFinishId(item.id)}
-                        className={`flex items-center gap-1.5 rounded-full border px-1.5 py-1 text-left text-[12px] leading-none ${
-                          selected
-                            ? "border-neutral-900 bg-neutral-900 text-white"
-                            : "border-[#ebebeb] bg-white text-neutral-800"
+                        className={`size-6 shrink-0 rounded-full border border-black/15 ${
+                          selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
                         }`}
-                      >
-                        <span
-                          className="size-3.5 shrink-0 rounded-full border border-black/10"
-                          style={{ backgroundColor: item.color }}
-                        />
-                        {item.label}
-                      </button>
+                        style={{ backgroundColor: item.color }}
+                      />
                     );
                   })}
                 </div>
               </div>
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2.5">
                 <span className="text-[13px] text-neutral-500">Background</span>
                 <input
                   ref={fileRef}
@@ -360,42 +364,61 @@ export function Studio() {
                 />
                 <Button
                   type="button"
-                  variant="outline"
+                  variant={useCustom ? "default" : "outline"}
                   className="h-8 border-[#ebebeb] px-2 text-[13px]"
                   onClick={() => fileRef.current?.click()}
                 >
                   Upload image
                 </Button>
-                {customBg ? (
-                  <Button
-                    type="button"
-                    variant={useCustom ? "default" : "outline"}
-                    className="h-8 justify-start border-[#ebebeb] px-2 text-[13px]"
-                    onClick={() => setUseCustom(true)}
-                  >
-                    Your image
-                  </Button>
-                ) : null}
-                <div className="flex max-h-28 flex-col gap-1 overflow-y-auto pr-0.5">
-                  {BACKGROUNDS.map((item) => (
-                    <Button
-                      key={item.id}
-                      type="button"
-                      variant={!useCustom && background === item.id ? "default" : "outline"}
-                      className="h-8 w-full shrink-0 justify-start gap-1.5 border-[#ebebeb] px-2 text-[13px]"
-                      onClick={() => {
-                        setUseCustom(false);
-                        setBackground(item.id);
-                      }}
-                    >
-                      <span
-                        className="size-3.5 shrink-0 rounded-full border border-black/10"
+                <div className="flex flex-wrap gap-2 p-0.5" role="listbox" aria-label="Solid backgrounds">
+                  {SOLID_BACKGROUNDS.map((item) => {
+                    const selected = !useCustom && background === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        aria-label={item.label}
+                        onClick={() => {
+                          setUseCustom(false);
+                          setBackground(item.id);
+                        }}
+                        className={`size-6 shrink-0 rounded-full border border-black/15 ${
+                          selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
+                        }`}
                         style={{ background: item.css }}
                       />
-                      <span className="truncate">{item.label}</span>
-                    </Button>
-                  ))}
+                    );
+                  })}
                 </div>
+                {GRADIENT_GROUPS.map((group) => (
+                  <div key={group.label} className="flex flex-col gap-1.5">
+                    <span className="text-[12px] text-neutral-500">{group.label}</span>
+                    <div className="flex flex-wrap gap-1.5 p-0.5" role="listbox" aria-label={group.label}>
+                      {group.items.map((item) => {
+                        const selected = !useCustom && background === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            aria-label={group.label}
+                            onClick={() => {
+                              setUseCustom(false);
+                              setBackground(item.id);
+                            }}
+                            className={`size-5 shrink-0 rounded-full border border-black/10 ${
+                              selected ? "ring-2 ring-neutral-950 ring-offset-2" : ""
+                            }`}
+                            style={{ background: item.css }}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
               {handheld ? (
                 <div className="flex flex-col gap-2">
