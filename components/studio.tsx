@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { ScreenInput, ShotMode } from "@/components/scene";
+import type { CinematicId, CinematicShot, ScreenInput, ShotMode } from "@/components/scene";
 import {
   BACKGROUNDS,
   DEVICES,
@@ -121,6 +121,13 @@ const GRADIENT_GROUPS = [
   { label: "Laurel", items: BACKGROUNDS.filter((item) => item.id.startsWith("green-glory-")) },
   { label: "Velvet", items: BACKGROUNDS.filter((item) => item.id.startsWith("deep-dusk-")) },
 ];
+const CINEMATICS: { id: CinematicId; label: string }[] = [
+  { id: "pull-back", label: "Pull back" },
+  { id: "push-in", label: "Push in" },
+  { id: "orbit", label: "Orbit" },
+  { id: "reveal", label: "Reveal" },
+  { id: "settle", label: "Settle" },
+];
 
 function socketUrl() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -138,6 +145,8 @@ export function Studio() {
   const [light, setLight] = useState(1);
   const [autoRotate, setAutoRotate] = useState(false);
   const [logoLight, setLogoLight] = useState(false);
+  const [cinematic, setCinematic] = useState<CinematicShot | null>(null);
+  const cinematicToken = useRef(0);
   const [apertura, setApertura] = useState(0);
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [time, setTime] = useState("9:41");
@@ -211,6 +220,10 @@ export function Studio() {
       if (customBg) URL.revokeObjectURL(customBg);
     };
   }, [customBg]);
+
+  useEffect(() => {
+    setCinematic(null);
+  }, [apertura, deviceId, orientation]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -391,6 +404,8 @@ export function Studio() {
             time={time || "9:41"}
             autoRotate={autoRotate}
             logoLight={logoLight}
+            cinematic={cinematic}
+            onCinematicEnd={() => setCinematic(null)}
             exportRef={exportRef}
             onInput={sendInput}
           />
@@ -501,6 +516,30 @@ export function Studio() {
               </div>
               <ToggleRow label="Auto-rotate" checked={autoRotate} onChange={setAutoRotate} />
               <ToggleRow label="Logo light" checked={logoLight} onChange={setLogoLight} />
+              <div className="flex flex-col gap-2">
+                <span className="text-[13px] text-neutral-500">Cinematics</span>
+                <div className="flex flex-col gap-1">
+                  {CINEMATICS.map((item) => {
+                    const playing = cinematic?.id === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        aria-pressed={playing}
+                        onClick={() => {
+                          cinematicToken.current += 1;
+                          setCinematic({ id: item.id, token: cinematicToken.current });
+                        }}
+                        className={`h-8 rounded-md px-2.5 text-left text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                          playing ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-100"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               {handheld ? (
                 <div className="flex flex-col gap-2">
                   <span className="text-[13px] text-neutral-500">Orientation</span>

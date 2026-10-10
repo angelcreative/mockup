@@ -135,6 +135,21 @@ export function macSpan(device: DeviceSpec, apertura: number) {
   return macLayout(device, apertura).span;
 }
 
+export function macScreenSize(device: DeviceSpec, apertura: number) {
+  const layout = macLayout(device, apertura);
+  if (layout.kind === "desktop") return { width: layout.screenW, height: layout.screenH };
+  const bezel = Math.min(layout.w, layout.d) * 0.028;
+  const aspect = device.width / Math.max(1, device.height);
+  let width = layout.w - bezel * 2;
+  let height = width / aspect;
+  const maxH = layout.d - bezel * 2.6;
+  if (height > maxH) {
+    height = maxH;
+    width = height * aspect;
+  }
+  return { width, height };
+}
+
 export function macFoot(device: DeviceSpec, apertura: number) {
   return macLayout(device, apertura).height;
 }

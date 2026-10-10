@@ -7,7 +7,7 @@ import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
 import { BACKGROUNDS, duoScreen, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
-import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
+import { DeviceModel, deviceFoot, deviceScreenSize, deviceSpan } from "@/components/devices";
 import { paintScreen } from "@/components/chrome";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 
@@ -16,6 +16,10 @@ export type ScreenInput =
   | { action: "wheel"; x: number; y: number; button: number; deltaX: number; deltaY: number };
 
 export type ShotMode = "png" | "transparent" | "square" | "story";
+
+export type CinematicId = "pull-back" | "push-in" | "orbit" | "reveal" | "settle";
+
+export type CinematicShot = { id: CinematicId; token: number };
 
 function makeCanvasTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
@@ -571,6 +575,168 @@ function ScreenPointer({
   return null;
 }
 
+const SHOT_SECONDS = 5;
+const RADIUS_MIN = 7.15;
+const RADIUS_MAX = 25.6;
+
+type CameraPose = { theta: number; phi: number; radius: number };
+
+type OrbitState = {
+  target: THREE.Vector3;
+  enableDamping: boolean;
+  autoRotate: boolean;
+};
+
+function easeInOut(amount: number) {
+  const t = Math.min(1, Math.max(0, amount));
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function fitDistance(width: number, height: number, fov: number, aspect: number, margin: number) {
+  const tanV = Math.tan((fov * Math.PI) / 360);
+  const tanH = tanV * Math.max(aspect, 0.6);
+  const vertical = (height * margin) / (2 * tanV);
+  const horizontal = (width * margin) / (2 * tanH);
+  return Math.max(vertical, horizontal);
+}
+
+function clampRadius(radius: number) {
+  return Math.min(RADIUS_MAX, Math.max(RADIUS_MIN, radius));
+}
+
+function shotPoses(id: CinematicId, close: number, wide: number): { from: CameraPose; to: CameraPose } {
+  const front: CameraPose = { theta: 0.04, phi: 1.5, radius: close };
+  const hero: CameraPose = { theta: 0.66, phi: 1.3, radius: wide };
+  if (id === "pull-back") return { from: front, to: hero };
+  if (id === "push-in") return { from: hero, to: front };
+  if (id === "orbit") {
+    return {
+      from: { theta: 0.04, phi: 1.28, radius: wide },
+      to: { theta: 0.04 + Math.PI, phi: 1.28, radius: wide },
+    };
+  }
+  if (id === "reveal") {
+    return {
+      from: { theta: Math.PI, phi: 1.16, radius: clampRadius(Math.min(wide, close * 1.55)) },
+      to: { theta: 0.04, phi: 1.48, radius: clampRadius(Math.min(wide * 0.82, close * 1.16)) },
+    };
+  }
+  return {
+    from: { theta: 0.18, phi: 1.52, radius: clampRadius(wide * 0.94) },
+    to: hero,
+  };
+}
+
+function lerpPose(from: CameraPose, to: CameraPose, amount: number): CameraPose {
+  return {
+    theta: from.theta + (to.theta - from.theta) * amount,
+    phi: from.phi + (to.phi - from.phi) * amount,
+    radius: from.radius + (to.radius - from.radius) * amount,
+  };
+}
+
+function placeCamera(camera: THREE.Camera, controls: OrbitState | null, pose: CameraPose) {
+  const target = controls?.target ?? new THREE.Vector3();
+  target.set(0, 0, 0);
+  const sinPhi = Math.sin(pose.phi);
+  camera.position.set(
+    pose.radius * sinPhi * Math.sin(pose.theta),
+    pose.radius * Math.cos(pose.phi),
+    pose.radius * sinPhi * Math.cos(pose.theta),
+  );
+  camera.lookAt(target);
+}
+
+function Cinematic({
+  shot,
+  device,
+  apertura,
+  orientation,
+  onEnd,
+}: {
+  shot: CinematicShot | null;
+  device: DeviceSpec;
+  apertura: number;
+  orientation: Orientation;
+  onEnd: () => void;
+}) {
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  const controls = useThree((state) => state.controls) as OrbitState | null;
+  const gl = useThree((state) => state.gl);
+  const size = useThree((state) => state.size);
+  const invalidate = useThree((state) => state.invalidate);
+  const run = useRef<{ from: CameraPose; to: CameraPose; elapsed: number } | null>(null);
+  const controlsRef = useRef(controls);
+  const onEndRef = useRef(onEnd);
+  const framingRef = useRef({ device, orientation, apertura, width: size.width, height: size.height });
+  controlsRef.current = controls;
+  onEndRef.current = onEnd;
+  framingRef.current = { device, orientation, apertura, width: size.width, height: size.height };
+
+  useEffect(() => {
+    if (!shot) {
+      run.current = null;
+      if (controlsRef.current) controlsRef.current.enableDamping = true;
+      return;
+    }
+    const framing = framingRef.current;
+    const screen = deviceScreenSize(framing.device, framing.orientation, framing.apertura);
+    const aspect = framing.height > 0 ? framing.width / framing.height : 1.4;
+    const close = clampRadius(fitDistance(screen.width, screen.height, camera.fov, aspect, 1.05));
+    const wide = clampRadius(Math.max(close + 3.4, close * 1.7, Math.max(screen.width, screen.height) * 2.7));
+    const poses = shotPoses(shot.id, close, wide);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      placeCamera(camera, controlsRef.current, poses.to);
+      run.current = null;
+      if (controlsRef.current) controlsRef.current.enableDamping = true;
+      invalidate();
+      onEndRef.current();
+      return;
+    }
+    run.current = { from: poses.from, to: poses.to, elapsed: 0 };
+    placeCamera(camera, controlsRef.current, poses.from);
+    invalidate();
+  }, [camera, invalidate, shot]);
+
+  useEffect(() => {
+    const dom = gl.domElement;
+    const grab = () => {
+      if (!run.current) return;
+      run.current = null;
+      if (controlsRef.current) controlsRef.current.enableDamping = true;
+      onEndRef.current();
+    };
+    dom.addEventListener("pointerdown", grab);
+    return () => dom.removeEventListener("pointerdown", grab);
+  }, [gl]);
+
+  useEffect(() => {
+    return () => {
+      if (controlsRef.current) controlsRef.current.enableDamping = true;
+    };
+  }, []);
+
+  useFrame((_, delta) => {
+    const current = run.current;
+    const orbit = controlsRef.current;
+    if (!current || !orbit) return;
+    orbit.enableDamping = false;
+    orbit.autoRotate = false;
+    current.elapsed += Math.min(delta, 0.05);
+    const done = current.elapsed >= SHOT_SECONDS;
+    const amount = done ? 1 : easeInOut(current.elapsed / SHOT_SECONDS);
+    placeCamera(camera, orbit, lerpPose(current.from, current.to, amount));
+    invalidate();
+    if (!done) return;
+    run.current = null;
+    orbit.enableDamping = true;
+    onEndRef.current();
+  });
+
+  return null;
+}
+
 function Turntable({ enabled }: { enabled: boolean }) {
   const controls = useThree((state) => state.controls) as {
     autoRotate: boolean;
@@ -634,6 +800,8 @@ function Stage({
   time,
   autoRotate,
   logoLight,
+  cinematic,
+  onCinematicEnd,
   exportRef,
   onInput,
 }: {
@@ -649,6 +817,8 @@ function Stage({
   time: string;
   autoRotate: boolean;
   logoLight: boolean;
+  cinematic: CinematicShot | null;
+  onCinematicEnd: () => void;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
@@ -710,7 +880,14 @@ function Stage({
         minAzimuthAngle={-Infinity}
         maxAzimuthAngle={Infinity}
       />
-      <Turntable enabled={autoRotate} />
+      <Turntable enabled={autoRotate && !cinematic} />
+      <Cinematic
+        shot={cinematic}
+        device={device}
+        apertura={apertura}
+        orientation={orientation}
+        onEnd={onCinematicEnd}
+      />
       <ScreenPointer
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
@@ -734,6 +911,8 @@ export default function Scene({
   time,
   autoRotate,
   logoLight,
+  cinematic,
+  onCinematicEnd,
   exportRef,
   onInput,
 }: {
@@ -749,6 +928,8 @@ export default function Scene({
   time: string;
   autoRotate: boolean;
   logoLight: boolean;
+  cinematic: CinematicShot | null;
+  onCinematicEnd: () => void;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
@@ -782,6 +963,8 @@ export default function Scene({
           time={time}
           autoRotate={autoRotate}
           logoLight={logoLight}
+          cinematic={cinematic}
+          onCinematicEnd={onCinematicEnd}
           exportRef={exportRef}
           onInput={onInput}
         />

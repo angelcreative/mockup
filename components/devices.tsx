@@ -25,7 +25,7 @@ import {
 } from "@/components/geometry";
 import { RearModule, SideControls } from "@/components/hardware";
 import { AppleLogo } from "@/components/logo";
-import { ImacMesh, LaptopMesh, macFoot, macSpan } from "@/components/macs";
+import { ImacMesh, LaptopMesh, macFoot, macScreenSize, macSpan } from "@/components/macs";
 import { landscapeStatusPx } from "@/lib/devices";
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
@@ -450,6 +450,23 @@ export function DeviceModel({
     return <ImacMesh device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
   }
   return <Slab device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
+}
+
+export function deviceScreenSize(device: DeviceSpec, orientation: Orientation, apertura: number) {
+  if (device.kind === "laptop" || device.kind === "desktop") return macScreenSize(device, apertura);
+  if (device.id === "iphone-duo") {
+    const open = isDuoOpen(apertura);
+    const cssW = open ? DUO_INNER_WIDTH : DUO_OUTER_WIDTH;
+    const cssH = open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT;
+    const height = DUO_BODY.height * DUO_CM * (open ? 0.86 : 0.9);
+    const width = height * (cssW / cssH);
+    if (orientation === "landscape") return { width: height, height: width };
+    return { width, height };
+  }
+  const profile = device.kind === "tablet" ? "tablet" : "phone";
+  const frame = frameSize(device.width, device.height, profile);
+  if (orientation === "landscape") return { width: frame.screenH, height: frame.screenW };
+  return { width: frame.screenW, height: frame.screenH };
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
