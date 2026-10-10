@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { isAllowedViewport } from "@/lib/devices";
 import { CaptureError, assertPublicUrl } from "@/lib/ssrf";
 
-export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MOBILE_UA =
