@@ -46,6 +46,7 @@ export function Studio() {
   const [url, setUrl] = useState("");
   const [deviceId, setDeviceId] = useState<DeviceId>("iphone-14");
   const [background, setBackground] = useState<BackgroundId>("blanco");
+  const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
   const [light, setLight] = useState(1);
   const [apertura, setApertura] = useState(0);
   const [screen, setScreen] = useState<ScreenState>(EMPTY_SCREEN);
@@ -55,6 +56,7 @@ export function Studio() {
   const openedRef = useRef("");
   const sentSize = useRef("");
   const device = deviceById(deviceId);
+  const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura);
   const loading = screen.status === "loading";
 
@@ -256,14 +258,44 @@ export function Studio() {
             apertura={apertura}
             light={light}
             background={background}
+            finish={finish}
             exportRef={exportRef}
             onInput={sendInput}
           />
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-end justify-between gap-3 p-4 sm:p-6">
-          <div className="pointer-events-auto w-full max-w-[248px] rounded-xl border border-[#ebebeb] bg-white p-4">
+          <div className="pointer-events-auto w-full max-w-[280px] rounded-xl border border-[#ebebeb] bg-white p-4">
             <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <span className="text-[13px] text-neutral-500">Acabado</span>
+                <div className="flex flex-wrap gap-1.5" role="listbox" aria-label="Acabado">
+                  {device.finishes.map((item) => {
+                    const selected = item.id === finish.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        aria-label={item.label}
+                        onClick={() => setFinishId(item.id)}
+                        className={`flex items-center gap-1.5 rounded-full border px-1.5 py-1 text-left text-[12px] leading-none ${
+                          selected
+                            ? "border-neutral-900 bg-neutral-900 text-white"
+                            : "border-[#ebebeb] bg-white text-neutral-800"
+                        }`}
+                      >
+                        <span
+                          className="size-3.5 shrink-0 rounded-full border border-black/10"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="flex flex-col gap-2">
                 <span className="text-[13px] text-neutral-500">Fondo</span>
                 <div className="grid grid-cols-2 gap-1.5">
@@ -272,9 +304,13 @@ export function Studio() {
                       key={item.id}
                       type="button"
                       variant={background === item.id ? "default" : "outline"}
-                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                      className="h-8 justify-start gap-1.5 border-[#ebebeb] px-2 text-[13px]"
                       onClick={() => setBackground(item.id)}
                     >
+                      <span
+                        className="size-3.5 shrink-0 rounded-full border border-black/10"
+                        style={{ background: item.css }}
+                      />
                       {item.label}
                     </Button>
                   ))}

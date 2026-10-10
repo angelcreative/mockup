@@ -5,7 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
-import type { BackgroundId, DeviceSpec, ScreenState } from "@/lib/devices";
+import type { BackgroundId, DeviceSpec, FinishSpec, ScreenState } from "@/lib/devices";
 import { BACKGROUNDS, duoScreen, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceSpan } from "@/components/devices";
 import { paintScreen } from "@/components/chrome";
@@ -114,29 +114,106 @@ function useDeviceTexture(
   return { texture, leftTexture, rightTexture };
 }
 
-function createGradientTexture() {
-  const canvas = document.createElement("canvas");
-  canvas.width = 32;
-  canvas.height = 512;
-  const context = canvas.getContext("2d");
-  if (!context) return new THREE.CanvasTexture(canvas);
-  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, "#f4f4f5");
-  gradient.addColorStop(0.42, "#ffffff");
-  gradient.addColorStop(1, "#d4d4d8");
+function radial(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  inner: number,
+  outer: number,
+  stops: ReadonlyArray<readonly [number, string]>,
+) {
+  const gradient = context.createRadialGradient(x, y, inner, x, y, outer);
+  for (const [offset, color] of stops) gradient.addColorStop(offset, color);
   context.fillStyle = gradient;
-  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillRect(0, 0, width, height);
+}
+
+function paintWallpaper(background: BackgroundId) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 960;
+  canvas.height = 540;
+  const context = canvas.getContext("2d");
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearFilter;
+  if (!context) return texture;
+  const width = canvas.width;
+  const height = canvas.height;
+  if (background === "vibrant-vista") {
+    const base = context.createLinearGradient(0, 0, width, height);
+    base.addColorStop(0, "#1480ff");
+    base.addColorStop(0.3, "#3a4de8");
+    base.addColorStop(0.62, "#ff4d6a");
+    base.addColorStop(1, "#ffb15a");
+    context.fillStyle = base;
+    context.fillRect(0, 0, width, height);
+    radial(context, width, height, width * 0.92, height * 0.06, 12, width * 0.55, [
+      [0, "#d7f3ff"],
+      [0.42, "#7ecfff"],
+      [1, "rgba(126,207,255,0)"],
+    ]);
+    radial(context, width, height, width * 0.08, height * 0.58, 16, width * 0.72, [
+      [0, "#ff2f86"],
+      [0.38, "#ff4d55"],
+      [1, "rgba(255,77,85,0)"],
+    ]);
+    radial(context, width, height, width * 0.96, height * 0.42, 20, width * 0.7, [
+      [0, "#ffb15c"],
+      [0.48, "#ff8a6a"],
+      [1, "rgba(255,138,106,0)"],
+    ]);
+    radial(context, width, height, width * 0.35, height * 1.02, 10, width * 0.7, [
+      [0, "#2a1570"],
+      [0.45, "#6a3fd0"],
+      [1, "rgba(106,63,208,0)"],
+    ]);
+    radial(context, width, height, width, height, 8, width * 0.42, [
+      [0, "#3aa0ff"],
+      [1, "rgba(58,160,255,0)"],
+    ]);
+  } else {
+    const base = context.createLinearGradient(0, 0, width, height);
+    base.addColorStop(0, "#00f0a0");
+    base.addColorStop(0.42, "#00a878");
+    base.addColorStop(1, "#02141c");
+    context.fillStyle = base;
+    context.fillRect(0, 0, width, height);
+    radial(context, width, height, 0, height * 0.28, 10, width * 0.62, [
+      [0, "#b6ff3c"],
+      [0.34, "#00e85a"],
+      [1, "rgba(0,232,90,0)"],
+    ]);
+    radial(context, width, height, width * 0.16, height * 0.55, 8, width * 0.78, [
+      [0, "#00ff6a"],
+      [0.4, "#00c878"],
+      [1, "rgba(0,200,120,0)"],
+    ]);
+    radial(context, width, height, width, height * 0.12, 10, width * 0.5, [
+      [0, "#063a58"],
+      [1, "rgba(6,58,88,0)"],
+    ]);
+    radial(context, width, height, width * 0.75, height * 1.05, 10, width * 0.65, [
+      [0, "#01080c"],
+      [0.55, "#042430"],
+      [1, "rgba(4,36,48,0)"],
+    ]);
+    radial(context, width, height, width, height * 0.55, 8, width * 0.34, [
+      [0, "#19d8ff"],
+      [1, "rgba(25,216,255,0)"],
+    ]);
+  }
+  texture.needsUpdate = true;
   return texture;
 }
 
 function SceneBackground({ background }: { background: BackgroundId }) {
+  const textured = background === "vibrant-vista" || background === "green-glory";
   const texture = useMemo(
-    () => (background === "gradiente" ? createGradientTexture() : null),
-    [background],
+    () => (textured ? paintWallpaper(background) : null),
+    [background, textured],
   );
 
   useEffect(() => () => texture?.dispose(), [texture]);
@@ -217,8 +294,9 @@ function FrameCamera({ span }: { span: number }) {
     | null;
 
   useEffect(() => {
-    const distance = Math.max(12.2, span * 2.35);
-    camera.position.set(distance * 0.08, 0.16, distance);
+    const distance = Math.max(13.6, span * 2.75);
+    const azimuth = 0.62;
+    camera.position.set(Math.sin(azimuth) * distance, distance * 0.2, Math.cos(azimuth) * distance);
     camera.lookAt(0, 0, 0);
     if (controls) {
       controls.target.set(0, 0, 0);
@@ -406,6 +484,7 @@ function Stage({
   apertura,
   light,
   background,
+  finish,
   exportRef,
   onInput,
 }: {
@@ -415,6 +494,7 @@ function Stage({
   apertura: number;
   light: number;
   background: BackgroundId;
+  finish: FinishSpec;
   exportRef: MutableRefObject<(() => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
@@ -442,8 +522,10 @@ function Stage({
       <ExportBridge exportRef={exportRef} />
       <FrameCamera span={span} />
       <ambientLight intensity={0.55 * light} />
+      <hemisphereLight args={["#f4f4f2", "#d5d5d2", 0.4 * light]} />
       <directionalLight position={[3.4, 5.2, 4.2]} intensity={1.25 * light} />
       <directionalLight position={[-3.2, 2.4, 2.2]} intensity={0.38 * light} />
+      <directionalLight position={[-1.6, 3.2, -5.4]} intensity={0.9 * light} />
       <DeviceModel
         device={device}
         texture={texture}
@@ -451,6 +533,7 @@ function Stage({
         rightTexture={rightTexture}
         status={screen.status}
         apertura={apertura}
+        finish={finish}
       />
       <SoftShadow
         y={-foot / 2 - 0.012}
@@ -463,7 +546,7 @@ function Stage({
         enableDamping
         dampingFactor={0.08}
         minDistance={7}
-        maxDistance={18}
+        maxDistance={26}
         minPolarAngle={Math.PI / 8}
         maxPolarAngle={Math.PI * 0.82}
       />
@@ -483,6 +566,7 @@ export default function Scene({
   apertura,
   light,
   background,
+  finish,
   exportRef,
   onInput,
 }: {
@@ -492,13 +576,14 @@ export default function Scene({
   apertura: number;
   light: number;
   background: BackgroundId;
+  finish: FinishSpec;
   exportRef: MutableRefObject<(() => void) | null>;
   onInput: (input: ScreenInput) => void;
 }) {
   return (
     <Canvas
       dpr={2}
-      camera={{ position: [1.05, 0.18, 12.2], fov: 28 }}
+      camera={{ position: [7.6, 2.6, 10.4], fov: 28 }}
       gl={{
         preserveDrawingBuffer: true,
         antialias: true,
@@ -517,8 +602,9 @@ export default function Scene({
           frame={frame}
           apertura={apertura}
           light={light}
-          background={background}
-          exportRef={exportRef}
+            background={background}
+            finish={finish}
+            exportRef={exportRef}
           onInput={onInput}
         />
       </Suspense>

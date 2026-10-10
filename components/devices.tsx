@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import type { DeviceSpec, ScreenStatus } from "@/lib/devices";
+import type { DeviceSpec, FinishSpec, ScreenStatus } from "@/lib/devices";
 import {
   DUO_BODY,
   DUO_CM,
@@ -22,16 +22,7 @@ import {
   roundedRectGeometry,
   topNotchGeometry,
 } from "@/components/geometry";
-
-const FINISH = {
-  midnight: { color: "#16161a", metalness: 0.42, roughness: 0.46 },
-  black: { color: "#1c1c1f", metalness: 0.4, roughness: 0.48 },
-  graphite: { color: "#2a2c31", metalness: 0.48, roughness: 0.42 },
-  titanium: { color: "#8d8a83", metalness: 0.62, roughness: 0.36 },
-  silver: { color: "#d7d7dc", metalness: 0.58, roughness: 0.32 },
-  starlight: { color: "#e4dccd", metalness: 0.46, roughness: 0.4 },
-  cielo: { color: "#1a2433", metalness: 0.72, roughness: 0.34 },
-} as const;
+import { RearModule, SideControls } from "@/components/hardware";
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -49,39 +40,6 @@ function ScreenSpinner({ position }: { position: [number, number, number] }) {
       <ringGeometry args={[0.105, 0.132, 48, 1, 0, Math.PI * 1.35]} />
       <meshBasicMaterial color="#171717" />
     </mesh>
-  );
-}
-
-function SideButtons({
-  bodyW,
-  color,
-  side,
-}: {
-  bodyW: number;
-  color: string;
-  side: "both" | "left" | "right";
-}) {
-  return (
-    <group>
-      {side !== "right" ? (
-        <>
-          <mesh position={[-bodyW / 2 - 0.012, 0.62, 0]}>
-            <boxGeometry args={[0.022, 0.2, 0.048]} />
-            <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
-          </mesh>
-          <mesh position={[-bodyW / 2 - 0.012, 0.26, 0]}>
-            <boxGeometry args={[0.022, 0.34, 0.048]} />
-            <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
-          </mesh>
-        </>
-      ) : null}
-      {side !== "left" ? (
-        <mesh position={[bodyW / 2 + 0.012, 0.38, 0]}>
-          <boxGeometry args={[0.022, 0.5, 0.048]} />
-          <meshStandardMaterial color={color} metalness={0.55} roughness={0.38} />
-        </mesh>
-      ) : null}
-    </group>
   );
 }
 
@@ -141,10 +99,12 @@ function Slab({
   device,
   texture,
   status,
+  finish,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
   status: ScreenStatus;
+  finish: FinishSpec;
 }) {
   const profile = device.kind === "tablet" ? "tablet" : "phone";
   const frame = useMemo(
@@ -183,8 +143,7 @@ function Slab({
     }, [frame.screenW, frame.screenH, device.width, device.height]),
   );
 
-  const finish = FINISH[device.finish];
-  const zFront = frame.depth / 2 + 0.01;
+  const zFront = frame.depth / 2 + 0.012;
   const islandH = frame.screenH * (ISLAND_POINTS.height / device.height);
   const islandY =
     frame.screenH / 2 - frame.screenH * (ISLAND_POINTS.top / device.height) - islandH / 2;
@@ -226,14 +185,13 @@ function Slab({
           depth={frame.depth}
         />
       )}
-      {device.kind === "tablet" ? (
-        <mesh position={[frame.bodyW / 2 + 0.01, 0.55, 0]}>
-          <boxGeometry args={[0.016, 0.28, 0.03]} />
-          <meshStandardMaterial color={finish.color} metalness={0.55} roughness={0.38} />
-        </mesh>
-      ) : (
-        <SideButtons bodyW={frame.bodyW} color={finish.color} side="both" />
-      )}
+      <RearModule rear={device.rear} bodyW={frame.bodyW} bodyH={frame.bodyH} depth={frame.depth} />
+      <SideControls
+        layout={device.buttons}
+        bodyW={frame.bodyW}
+        bodyH={frame.bodyH}
+        color={finish.color}
+      />
       {status === "loading" ? <ScreenSpinner position={[0, 0.15, zFront + 0.02]} /> : null}
     </group>
   );
@@ -255,49 +213,20 @@ function hitData(
   };
 }
 
-function RearCameras({ bodyW, bodyH, depth }: { bodyW: number; bodyH: number; depth: number }) {
-  return (
-    <group position={[-bodyW * 0.2, bodyH * 0.22, -depth / 2 - 0.1]} rotation={[0, Math.PI, 0]}>
-      <mesh>
-        <boxGeometry args={[1.05, 2.05, 0.09]} />
-        <meshStandardMaterial color="#2c3544" metalness={0.62} roughness={0.32} />
-      </mesh>
-      {[0.46, -0.46].map((y) => (
-        <group key={y} position={[0, y, 0.05]}>
-          <mesh>
-            <circleGeometry args={[0.34, 32]} />
-            <meshStandardMaterial color="#0c1016" metalness={0.5} roughness={0.22} />
-          </mesh>
-          <mesh position={[0, 0, 0.01]}>
-            <circleGeometry args={[0.2, 28]} />
-            <meshStandardMaterial color="#05070b" metalness={0.8} roughness={0.12} />
-          </mesh>
-          <mesh position={[0.07, 0.07, 0.016]}>
-            <circleGeometry args={[0.045, 12]} />
-            <meshBasicMaterial color="#d5e8ff" />
-          </mesh>
-        </group>
-      ))}
-      <mesh position={[0.34, -0.9, 0.05]}>
-        <circleGeometry args={[0.09, 20]} />
-        <meshStandardMaterial color="#f7f1e6" metalness={0.15} roughness={0.4} />
-      </mesh>
-    </group>
-  );
-}
-
 function DuoMesh({
   texture,
   leftTexture,
   rightTexture,
   status,
   apertura,
+  finish,
 }: {
   texture: THREE.Texture;
   leftTexture: THREE.Texture;
   rightTexture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
+  finish: FinishSpec;
 }) {
   const bodyW = DUO_BODY.closedWidth * DUO_CM;
   const bodyH = DUO_BODY.height * DUO_CM;
@@ -308,7 +237,6 @@ function DuoMesh({
   const innerH = (1878 / 430) * 2.54 * DUO_CM;
   const innerHalfW = ((2670 / 430) * 2.54 * DUO_CM) / 2;
   const open = isDuoOpen(apertura);
-  const finish = FINISH.cielo;
 
   const body = useDisposable(
     useMemo(
@@ -338,8 +266,9 @@ function DuoMesh({
 
   // ExtrudeGeometry's bevel makes the shell thicker than `depth` on the back face.
   const zFront = depth / 2 + 0.08;
-  const gap = 0.012 * apertura;
+  const gap = 0.045 * apertura;
   const centerShift = (bodyW / 2) * (1 - apertura);
+  const stack = (depth + 0.07) * (1 - apertura);
   const innerShift = (bodyW - innerHalfW) / 2 + 0.04;
   const screenH = open ? innerH : outerH;
   const cssH = open ? DUO_INNER_HEIGHT : DUO_OUTER_HEIGHT;
@@ -349,9 +278,9 @@ function DuoMesh({
 
   return (
     <group position={[centerShift, 0, 0]}>
-      <mesh visible={apertura > 0.04} position={[0, 0, -0.01]}>
-        <cylinderGeometry args={[0.04, 0.04, bodyH * 0.98, 28]} />
-        <meshStandardMaterial color={hingeMetal} metalness={0.86} roughness={0.24} />
+      <mesh position={[0.03, 0, 0]}>
+        <cylinderGeometry args={[0.048, 0.048, bodyH * 0.78, 28]} />
+        <meshStandardMaterial color={hingeMetal} metalness={0.88} roughness={0.22} />
       </mesh>
       <group position={[-bodyW / 2, 0, 0]}>
         <mesh geometry={body}>
@@ -360,35 +289,32 @@ function DuoMesh({
         <mesh
           geometry={innerGlass}
           position={[innerShift, 0, zFront]}
-          visible={open}
           userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
         >
-          <meshBasicMaterial map={leftTexture} toneMapped={false} />
+          <meshBasicMaterial color={open ? "#ffffff" : "#050506"} map={open ? leftTexture : null} toneMapped={false} />
         </mesh>
-        <RearCameras bodyW={bodyW} bodyH={bodyH} depth={depth} />
-        <SideButtons bodyW={bodyW} color={finish.color} side="left" />
+        <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} />
+        <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="left" />
         {status === "loading" && open ? <ScreenSpinner position={[innerShift, 0.1, zFront + 0.02]} /> : null}
       </group>
       <group position={[0, 0, 0]} rotation={[0, (1 - apertura) * Math.PI, 0]}>
-        <group position={[bodyW / 2 + gap, 0, -(depth + 0.02) * (1 - apertura)]}>
+        <group position={[bodyW / 2 + gap, 0, -stack]}>
           <mesh geometry={body}>
             <meshStandardMaterial color={finish.color} metalness={finish.metalness} roughness={finish.roughness} />
           </mesh>
           <mesh
             geometry={innerGlass}
             position={[-innerShift, 0, zFront]}
-            visible={open}
             userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open)}
           >
-            <meshBasicMaterial map={rightTexture} toneMapped={false} />
+            <meshBasicMaterial color={open ? "#ffffff" : "#050506"} map={open ? rightTexture : null} toneMapped={false} />
           </mesh>
           <group position={[0, 0, -zFront]} rotation={[0, Math.PI, 0]}>
             <mesh
               geometry={outerGlass}
-              visible={!open}
               userData={hitData("single", DUO_OUTER_WIDTH, DUO_OUTER_HEIGHT, !open)}
             >
-              <meshBasicMaterial color="#ffffff" map={open ? null : texture} toneMapped={false} />
+              <meshBasicMaterial color={open ? "#050506" : "#ffffff"} map={open ? null : texture} toneMapped={false} />
             </mesh>
             {open ? null : (
               <mesh geometry={island} position={[0, islandY, 0.01]}>
@@ -396,11 +322,7 @@ function DuoMesh({
               </mesh>
             )}
           </group>
-          <SideButtons bodyW={bodyW} color={finish.color} side="right" />
-          <mesh position={[bodyW / 2 + 0.012, -0.15, 0]}>
-            <boxGeometry args={[0.02, 0.22, 0.04]} />
-            <meshStandardMaterial color={hingeMetal} metalness={0.7} roughness={0.3} />
-          </mesh>
+          <SideControls layout="duo" bodyW={bodyW} bodyH={bodyH} color={finish.color} edge="right" />
           {status === "loading" && !open ? <ScreenSpinner position={[0, 0.1, -zFront - 0.02]} /> : null}
         </group>
       </group>
@@ -420,6 +342,7 @@ export function DeviceModel({
   rightTexture,
   status,
   apertura,
+  finish,
 }: {
   device: DeviceSpec;
   texture: THREE.Texture;
@@ -427,6 +350,7 @@ export function DeviceModel({
   rightTexture: THREE.Texture;
   status: ScreenStatus;
   apertura: number;
+  finish: FinishSpec;
 }) {
   if (device.id === "iphone-duo") {
     return (
@@ -436,10 +360,11 @@ export function DeviceModel({
         rightTexture={rightTexture}
         status={status}
         apertura={apertura}
+        finish={finish}
       />
     );
   }
-  return <Slab device={device} texture={texture} status={status} />;
+  return <Slab device={device} texture={texture} status={status} finish={finish} />;
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
