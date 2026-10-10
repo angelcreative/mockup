@@ -111,7 +111,7 @@ export const DEVICES: readonly DeviceSpec[] = [
       { id: "medianoche", label: "Midnight", color: "#1c1d21", ...aluminum },
       { id: "purpura", label: "Purple", color: "#5c4e72", ...aluminum },
       { id: "blanco-estelar", label: "Starlight", color: "#f1ece3", ...aluminum },
-      { id: "product-red", label: "(PRODUCT)RED", color: "#c4122f", ...aluminum },
+      { id: "red", label: "Red", color: "#c4122f", ...aluminum },
       { id: "azul", label: "Blue", color: "#2f6d94", ...aluminum },
       { id: "amarillo", label: "Yellow", color: "#f0d56a", ...aluminum },
     ],
