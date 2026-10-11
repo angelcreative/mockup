@@ -80,6 +80,7 @@ const DEFAULT_URL = "https://www.apple.com";
 
 const QUIET = "duration-200 ease-out motion-reduce:transition-none";
 const MOTION = "duration-[240ms] ease-out motion-reduce:transition-none";
+const MARK_MOTION = "duration-[400ms] ease-out motion-reduce:transition-none";
 const SHELL_KEY = "mockup-shell";
 
 type ShellMode = "icon" | "rail" | "expanded";
@@ -240,6 +241,7 @@ export function Studio() {
   const designInputs = useRef<Partial<Record<DesignFamily, HTMLInputElement | null>>>({});
   const shellRef = useRef<HTMLDivElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLDivElement>(null);
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const groupRefs = useRef<Partial<Record<GroupId, HTMLButtonElement>>>({});
   const device = deviceById(deviceId);
@@ -621,6 +623,16 @@ export function Studio() {
     setDeviceId(value);
   }
 
+  function takeShot(mode: ShotMode) {
+    const mark = markRef.current;
+    if (mark) mark.style.visibility = "hidden";
+    try {
+      exportRef.current?.(mode);
+    } finally {
+      if (mark) mark.style.visibility = "";
+    }
+  }
+
   const expanded = shellMode === "expanded";
   const glassClearance = stageWidth < 900 && shellMode !== "icon" ? 72 : 0;
   const hinge = deviceId === "iphone-duo" || device.kind === "laptop";
@@ -655,6 +667,19 @@ export function Studio() {
         />
       </div>
 
+      <div
+        ref={markRef}
+        tabIndex={0}
+        className="group absolute top-4 left-4 z-40 flex h-9 items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+      >
+        <img src="/icons/positivo.svg" alt="" className="size-5 shrink-0" />
+        <span
+          className={`overflow-hidden text-[13px] whitespace-nowrap text-neutral-950 transition-[max-width,opacity] ${MARK_MOTION} max-w-0 opacity-0 group-hover:max-w-40 group-hover:opacity-100 group-focus-visible:max-w-40 group-focus-visible:opacity-100`}
+        >
+          <span className="pl-2">Live Mockup</span>
+        </span>
+      </div>
+
       {shellMode ? (
         <>
           <button
@@ -682,13 +707,6 @@ export function Studio() {
                 expanded ? "w-[212px]" : "w-12"
               } ${shellMode === "icon" ? "-translate-x-2 opacity-0" : "translate-x-0 opacity-100"}`}
             >
-              <div className="px-1.5 pt-1.5">
-                <div className="flex h-9 items-center">
-                  <span className="grid size-9 shrink-0 place-items-center">
-                    <img src="/icons/positivo.svg" alt="" className="size-5" />
-                  </span>
-                </div>
-              </div>
               <nav className="flex flex-col gap-0.5 p-1.5" aria-label="Controls">
                 {GROUPS.map((group) => {
                   const open = flyout === group.id;
@@ -1132,16 +1150,16 @@ export function Studio() {
                 ) : null}
                 {flyout === "export" ? (
                   <div className="grid grid-cols-2 gap-1.5">
-                    <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => exportRef.current?.("png")}>
+                    <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => takeShot("png")}>
                       PNG
                     </Button>
-                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("transparent")}>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => takeShot("transparent")}>
                       Transparent
                     </Button>
-                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("square")}>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => takeShot("square")}>
                       Square
                     </Button>
-                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("story")}>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => takeShot("story")}>
                       Story
                     </Button>
                   </div>
