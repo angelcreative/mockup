@@ -1,8 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
-import { ChevronDown } from "lucide-react";
+import {
+  ChevronDown,
+  Clapperboard,
+  Download,
+  Image as ImageIcon,
+  Link2,
+  Palette,
+  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Smartphone,
+  SunMedium,
+  type LucideIcon,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +62,37 @@ function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) 
 const DEFAULT_URL = "https://www.apple.com";
 
 const QUIET = "duration-200 ease-out motion-reduce:transition-none";
+const MOTION = "duration-[240ms] ease-out motion-reduce:transition-none";
+const SHELL_KEY = "mockup-shell";
+
+type ShellMode = "icon" | "rail" | "expanded";
+type GroupId = "page" | "device" | "finish" | "background" | "scene" | "cinematics" | "export";
+
+const GROUPS: { id: GroupId; label: string; icon: LucideIcon }[] = [
+  { id: "page", label: "Page", icon: Link2 },
+  { id: "device", label: "Device", icon: Smartphone },
+  { id: "finish", label: "Finish", icon: Palette },
+  { id: "background", label: "Background", icon: ImageIcon },
+  { id: "scene", label: "Scene", icon: SunMedium },
+  { id: "cinematics", label: "Cinematics", icon: Clapperboard },
+  { id: "export", label: "Export", icon: Download },
+];
+
+const SHELL_MODES: { id: ShellMode; label: string; icon: LucideIcon }[] = [
+  { id: "icon", label: "Hide", icon: PanelLeftClose },
+  { id: "rail", label: "Rail", icon: PanelLeft },
+  { id: "expanded", label: "Expand", icon: PanelLeftOpen },
+];
+
+function readShellMode(): ShellMode {
+  try {
+    const stored = sessionStorage.getItem(SHELL_KEY);
+    if (stored === "icon" || stored === "rail" || stored === "expanded") return stored;
+  } catch {
+    /* session storage can be blocked */
+  }
+  return "expanded";
+}
 
 function ToggleRow({
   label,
@@ -172,6 +216,14 @@ export function Studio() {
   const socketRef = useRef<WebSocket | null>(null);
   const openedRef = useRef("");
   const sentSize = useRef("");
+  const [shellMode, setShellMode] = useState<ShellMode | null>(null);
+  const [flyout, setFlyout] = useState<GroupId | null>(null);
+  const [flyoutTop, setFlyoutTop] = useState(0);
+  const [hint, setHint] = useState<{ label: string; top: number } | null>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  const iconButtonRef = useRef<HTMLButtonElement>(null);
+  const groupRefs = useRef<Partial<Record<GroupId, HTMLButtonElement>>>({});
   const device = deviceById(deviceId);
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura, orientation);
@@ -285,6 +337,60 @@ export function Studio() {
     socket.send(JSON.stringify({ type: "resize", width: viewport.width, height: viewport.height }));
   }, [viewport.width, viewport.height]);
 
+  useEffect(() => {
+    setShellMode(readShellMode());
+  }, []);
+
+  useEffect(() => {
+    if (!flyout) return;
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (shellRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-slot='select-content']")) return;
+      setFlyout(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFlyout(null);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [flyout]);
+
+  useLayoutEffect(() => {
+    const panel = flyoutRef.current;
+    const shell = shellRef.current;
+    const button = flyout ? groupRefs.current[flyout] : null;
+    if (!panel || !shell || !button) return;
+    const place = () => {
+      const shellRect = shell.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      const margin = 12;
+      const available = Math.max(0, window.innerWidth - shellRect.right - margin - 10);
+      panel.style.width = `${Math.min(280, available)}px`;
+      const height = panel.offsetHeight;
+      let top = buttonRect.top - shellRect.top;
+      if (shellRect.top + top + height > window.innerHeight - margin) {
+        top = window.innerHeight - margin - height - shellRect.top;
+      }
+      if (shellRect.top + top < margin) top = margin - shellRect.top;
+      setFlyoutTop(top);
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    observer.observe(shell);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [flyout, shellMode, openGroup, deviceId, orientation]);
+
   function sendInput(input: ScreenInput) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
@@ -390,338 +496,479 @@ export function Studio() {
     attachSocket(normalized, viewport.width, viewport.height);
   }
 
+  function chooseMode(next: ShellMode) {
+    setShellMode(next);
+    setHint(null);
+    try {
+      sessionStorage.setItem(SHELL_KEY, next);
+    } catch {
+      /* ignore */
+    }
+    if (next === "icon") {
+      setFlyout(null);
+      requestAnimationFrame(() => iconButtonRef.current?.focus());
+    }
+  }
+
+  function showHint(element: HTMLElement, label: string) {
+    if (shellMode !== "rail" || flyout) return;
+    const shell = shellRef.current;
+    if (!shell) return;
+    const shellRect = shell.getBoundingClientRect();
+    const rect = element.getBoundingClientRect();
+    setHint({ label, top: rect.top - shellRect.top + rect.height / 2 });
+  }
+
+  function chooseDevice(value: string | null) {
+    if (!value || !isDeviceId(value)) return;
+    const next = deviceById(value);
+    const wasHinge = device.id === "iphone-duo" || device.kind === "laptop";
+    const nextHinge = next.id === "iphone-duo" || next.kind === "laptop";
+    if (wasHinge && !nextHinge) cancelAnimationFrame(foldRef.current);
+    if (next.kind === "laptop" && device.kind !== "laptop") {
+      cancelAnimationFrame(foldRef.current);
+      setHingeOpen(true);
+      aperturaRef.current = 1;
+      setApertura(1);
+    }
+    if (next.id === "iphone-duo" && device.id !== "iphone-duo") {
+      cancelAnimationFrame(foldRef.current);
+      setHingeOpen(false);
+      aperturaRef.current = 0;
+      setApertura(0);
+    }
+    setDeviceId(value);
+  }
+
+  const expanded = shellMode === "expanded";
+  const hinge = deviceId === "iphone-duo" || device.kind === "laptop";
+  const flyoutLabel = flyout === "finish" ? `Finish · ${finish.label}` : GROUPS.find((item) => item.id === flyout)?.label;
+
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-white text-neutral-950">
-      <header className="z-20 flex flex-col gap-4 border-b border-[#ebebeb] bg-white px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:gap-10">
-        <div className="text-[15px] font-medium tracking-tight">Mockup</div>
-        <form
-          onSubmit={openPage}
-          className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center"
-        >
-          <Input
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder={DEFAULT_URL}
-            aria-label="Site URL"
-            inputMode="url"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
-          />
-          <div className="flex items-center gap-2">
-            <Select
-              value={deviceId}
-              items={DEVICES.map((item) => ({ value: item.id, label: item.label }))}
-              onValueChange={(value) => {
-                if (!value || !isDeviceId(value)) return;
-                const next = deviceById(value);
-                const wasHinge = device.id === "iphone-duo" || device.kind === "laptop";
-                const nextHinge = next.id === "iphone-duo" || next.kind === "laptop";
-                if (wasHinge && !nextHinge) cancelAnimationFrame(foldRef.current);
-                if (next.kind === "laptop" && device.kind !== "laptop") {
-                  cancelAnimationFrame(foldRef.current);
-                  setHingeOpen(true);
-                  aperturaRef.current = 1;
-                  setApertura(1);
-                }
-                if (next.id === "iphone-duo" && device.id !== "iphone-duo") {
-                  cancelAnimationFrame(foldRef.current);
-                  setHingeOpen(false);
-                  aperturaRef.current = 0;
-                  setApertura(0);
-                }
-                setDeviceId(value);
-              }}
+    <div className="relative h-dvh overflow-hidden bg-white text-neutral-950">
+      <div className="absolute inset-0">
+        <Scene
+          device={device}
+          screen={screen}
+          frame={frame}
+          apertura={apertura}
+          orientation={orientation}
+          light={light}
+          background={background}
+          backgroundImage={useCustom ? customBg : null}
+          finish={finish}
+          time="9:41"
+          autoRotate={autoRotate}
+          logoLight={logoLight}
+          cinematic={cinematic}
+          onCinematicEnd={() => setCinematic(null)}
+          exportRef={exportRef}
+          onInput={sendInput}
+        />
+      </div>
+
+      {shellMode ? (
+        <>
+          <button
+            ref={iconButtonRef}
+            type="button"
+            aria-label="Show controls"
+            tabIndex={shellMode === "icon" ? 0 : -1}
+            aria-hidden={shellMode === "icon" ? undefined : true}
+            onClick={() => chooseMode("rail")}
+            className={`absolute bottom-5 left-5 z-20 grid size-10 place-items-center rounded-full bg-white text-neutral-950 shadow-[0_8px_24px_rgba(23,23,23,0.10)] ring-1 ring-black/5 transition-[opacity,translate] ${MOTION} focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none ${
+              shellMode === "icon" ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0"
+            }`}
+          >
+            <PanelLeft className="size-4" />
+          </button>
+
+          <div
+            ref={shellRef}
+            className={`absolute top-1/2 left-4 z-20 -translate-y-1/2 ${shellMode === "icon" ? "pointer-events-none" : ""}`}
+            inert={shellMode === "icon" ? true : undefined}
+            aria-hidden={shellMode === "icon" ? true : undefined}
+          >
+            <aside
+              className={`overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(23,23,23,0.08)] ring-1 ring-black/5 transition-[width,opacity,translate] ${MOTION} ${
+                expanded ? "w-[212px]" : "w-12"
+              } ${shellMode === "icon" ? "-translate-x-2 opacity-0" : "translate-x-0 opacity-100"}`}
             >
-              <SelectTrigger
-                aria-label="Device"
-                className="h-9 w-[168px] border-[#ebebeb] bg-white shadow-none sm:w-[210px]"
-              >
-                <SelectValue>
-                  {(value: DeviceId | null) =>
-                    DEVICES.find((item) => item.id === value)?.label ?? "Device"
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {DEVICES.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button type="submit" disabled={opening} className="h-9 px-3.5">
-              {opening ? "Opening…" : "Open"}
-            </Button>
-          </div>
-        </form>
-      </header>
-
-      <main className="relative min-h-0 flex-1">
-        <div className="absolute inset-0">
-          <Scene
-            device={device}
-            screen={screen}
-            frame={frame}
-            apertura={apertura}
-            orientation={orientation}
-            light={light}
-            background={background}
-            backgroundImage={useCustom ? customBg : null}
-            finish={finish}
-            time="9:41"
-            autoRotate={autoRotate}
-            logoLight={logoLight}
-            cinematic={cinematic}
-            onCinematicEnd={() => setCinematic(null)}
-            exportRef={exportRef}
-            onInput={sendInput}
-          />
-        </div>
-
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-end justify-between gap-3 p-4 sm:p-6">
-          <div className="pointer-events-auto flex max-h-[min(72vh,640px)] w-full max-w-[280px] flex-col rounded-xl border border-[#ebebeb] bg-white">
-            <div className="flex flex-col gap-4 overflow-y-auto p-4">
-              <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">
-                  Finish <span className="text-neutral-950">· {finish.label}</span>
-                </span>
-                <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Finish">
-                  {device.finishes.map((item) => (
-                    <ColorSwatch
-                      key={item.id}
-                      selected={item.id === finish.id}
-                      label={item.label}
-                      background={item.color}
-                      onClick={() => setFinishId(item.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2.5">
-                <span className="text-[13px] text-neutral-500">Background</span>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  aria-label="Upload a background image"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    event.target.value = "";
-                    if (!file || !file.type.startsWith("image/")) return;
-                    const next = URL.createObjectURL(file);
-                    setCustomBg(next);
-                    setUseCustom(true);
-                    setOpenGroup(null);
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant={useCustom ? "default" : "outline"}
-                  className="h-8 border-[#ebebeb] px-2 text-[13px]"
-                  onClick={() => fileRef.current?.click()}
-                >
-                  Upload image
-                </Button>
-                <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Solid backgrounds">
-                  {SOLID_BACKGROUNDS.map((item) => (
-                    <ColorSwatch
-                      key={item.id}
-                      selected={!useCustom && background === item.id}
-                      label={item.label}
-                      background={item.css}
-                      onClick={() => {
-                        setUseCustom(false);
-                        setOpenGroup(null);
-                        setBackground(item.id);
-                      }}
-                    />
-                  ))}
-                </div>
-                {GRADIENT_GROUPS.map((group) => {
-                  const open = openGroup === group.label;
+              <nav className="flex flex-col gap-0.5 p-1.5" aria-label="Controls">
+                {GROUPS.map((group) => {
+                  const open = flyout === group.id;
+                  const Icon = group.icon;
                   return (
-                    <div key={group.label}>
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        className="flex w-full items-center justify-between text-left text-[12px] text-neutral-500"
-                        onClick={() => setOpenGroup(open ? null : group.label)}
-                      >
-                        {group.label}
-                        <ChevronDown
-                          className={`size-3.5 transition-transform ${QUIET} ${open ? "rotate-180" : ""}`}
-                        />
-                      </button>
-                      <div
-                        className={`grid transition-[grid-template-rows,opacity] ${QUIET} ${
-                          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                    <button
+                      key={group.id}
+                      ref={(node) => {
+                        if (node) groupRefs.current[group.id] = node;
+                      }}
+                      type="button"
+                      aria-label={group.label}
+                      aria-expanded={open}
+                      aria-controls={open ? "shell-flyout" : undefined}
+                      onClick={() => {
+                        setHint(null);
+                        setFlyout(open ? null : group.id);
+                      }}
+                      onMouseEnter={(event) => showHint(event.currentTarget, group.label)}
+                      onMouseLeave={() => setHint(null)}
+                      onFocus={(event) => showHint(event.currentTarget, group.label)}
+                      onBlur={() => setHint(null)}
+                      className={`flex h-9 w-full items-center rounded-lg outline-none transition-colors ${MOTION} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                        open ? "bg-neutral-100 text-neutral-950" : "text-neutral-600 hover:bg-neutral-50 hover:text-neutral-950"
+                      }`}
+                    >
+                      <span className="grid size-9 shrink-0 place-items-center">
+                        <Icon className="size-4" />
+                      </span>
+                      <span
+                        className={`overflow-hidden text-left text-[13px] whitespace-nowrap transition-[max-width,opacity] ${MOTION} ${
+                          expanded ? "max-w-40 opacity-100" : "max-w-0 opacity-0"
                         }`}
                       >
-                        <div className="overflow-hidden" inert={open ? undefined : true}>
-                          <div className="flex flex-wrap gap-1.5 p-1 pt-1.5" role="listbox" aria-label={group.label}>
-                            {group.items.map((item) => (
-                              <ColorSwatch
-                                key={item.id}
-                                size="sm"
-                                selected={!useCustom && background === item.id}
-                                label={group.label}
-                                background={item.css}
-                                onClick={() => {
-                                  setUseCustom(false);
-                                  setOpenGroup(group.label);
-                                  setBackground(item.id);
-                                }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                        {group.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
+              <div
+                role="radiogroup"
+                aria-label="Sidebar"
+                className={`border-t border-[#ebebeb] ${expanded ? "grid grid-cols-3 gap-0.5 p-1.5" : "flex flex-col gap-0.5 p-1"}`}
+              >
+                {SHELL_MODES.map((item) => {
+                  const selected = shellMode === item.id;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      aria-label={item.label}
+                      onClick={() => chooseMode(item.id)}
+                      onMouseEnter={(event) => showHint(event.currentTarget, item.label)}
+                      onMouseLeave={() => setHint(null)}
+                      onFocus={(event) => showHint(event.currentTarget, item.label)}
+                      onBlur={() => setHint(null)}
+                      className={`rounded-md outline-none transition-colors ${MOTION} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                        expanded ? "h-7 text-[12px]" : "grid h-8 place-items-center"
+                      } ${selected ? "bg-neutral-100 text-neutral-950" : "text-neutral-400 hover:text-neutral-700"}`}
+                    >
+                      {expanded ? item.label : <Icon className="size-3.5" />}
+                    </button>
                   );
                 })}
               </div>
-              <ToggleRow label="Auto-rotate" checked={autoRotate} onChange={setAutoRotate} />
-              <ToggleRow label="Logo light" checked={logoLight} onChange={setLogoLight} />
-              <div className="flex flex-col gap-2">
-                <span className="text-[13px] text-neutral-500">Cinematics</span>
-                <div className="flex flex-col gap-1">
-                  {CINEMATICS.map((item) => {
-                    const playing = cinematic?.id === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        aria-pressed={playing}
-                        onClick={() => {
-                          cinematicToken.current += 1;
-                          setCinematic({ id: item.id, token: cinematicToken.current });
-                        }}
-                        className={`h-8 rounded-md px-2.5 text-left text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                          playing ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-100"
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              {handheld ? (
-                <div className="flex flex-col gap-2">
-                  <span className="text-[13px] text-neutral-500">Orientation</span>
-                  <div className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5">
-                    <span
-                      aria-hidden
-                      className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
-                        orientation === "landscape" ? "translate-x-full" : "translate-x-0"
-                      }`}
+              {expanded ? (
+                <p className="px-3 pb-2.5 text-[11px] text-neutral-400">
+                  By{" "}
+                  <a
+                    href="https://www.linkedin.com/in/angelsanchezcaceres/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-neutral-400 hover:text-neutral-500"
+                  >
+                    @angelcreative
+                  </a>
+                </p>
+              ) : null}
+            </aside>
+
+            {flyout && shellMode !== "icon" ? (
+              <div
+                key={flyout}
+                ref={flyoutRef}
+                id="shell-flyout"
+                role="region"
+                aria-label={GROUPS.find((item) => item.id === flyout)?.label}
+                className="shell-flyout absolute left-[calc(100%+10px)] z-30 max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-2xl bg-white p-3 shadow-[0_10px_30px_rgba(23,23,23,0.08)] ring-1 ring-black/5"
+                style={{ top: flyoutTop }}
+              >
+                <p className="mb-2.5 text-[13px] text-neutral-500">{flyoutLabel}</p>
+                {flyout === "page" ? (
+                  <form onSubmit={openPage} className="flex items-center gap-2">
+                    <Input
+                      value={url}
+                      onChange={(event) => setUrl(event.target.value)}
+                      placeholder={DEFAULT_URL}
+                      aria-label="Site URL"
+                      inputMode="url"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
                     />
-                    {(
-                      [
-                        ["portrait", "Portrait"],
-                        ["landscape", "Landscape"],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={orientation === value}
-                        onClick={() => setOrientation(value)}
-                        className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                          orientation === value ? "text-white" : "text-neutral-950"
-                        }`}
+                    <Button type="submit" disabled={opening} className="h-9 shrink-0 px-3.5">
+                      {opening ? "Opening…" : "Open"}
+                    </Button>
+                  </form>
+                ) : null}
+                {flyout === "device" ? (
+                  <div className="flex flex-col gap-3">
+                    <Select
+                      value={deviceId}
+                      items={DEVICES.map((item) => ({ value: item.id, label: item.label }))}
+                      onValueChange={chooseDevice}
+                    >
+                      <SelectTrigger
+                        aria-label="Device"
+                        className="h-9 w-full border-[#ebebeb] bg-white shadow-none"
                       >
-                        {label}
-                      </button>
+                        <SelectValue>
+                          {(value: DeviceId | null) =>
+                            DEVICES.find((item) => item.id === value)?.label ?? "Device"
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEVICES.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {handheld ? (
+                      <div className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5" role="group" aria-label="Orientation">
+                        <span
+                          aria-hidden
+                          className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
+                            orientation === "landscape" ? "translate-x-full" : "translate-x-0"
+                          }`}
+                        />
+                        {(
+                          [
+                            ["portrait", "Portrait"],
+                            ["landscape", "Landscape"],
+                          ] as const
+                        ).map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={orientation === value}
+                            onClick={() => setOrientation(value)}
+                            className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                              orientation === value ? "text-white" : "text-neutral-950"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {hinge ? (
+                      <div
+                        className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5"
+                        role="group"
+                        aria-label={device.kind === "laptop" ? "Lid" : "Duo"}
+                      >
+                        <span
+                          aria-hidden
+                          className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
+                            hingeOpen ? "translate-x-full" : "translate-x-0"
+                          }`}
+                        />
+                        {(
+                          [
+                            [false, "Close"],
+                            [true, "Open"],
+                          ] as const
+                        ).map(([open, label]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            aria-pressed={hingeOpen === open}
+                            onClick={() => setHinge(open)}
+                            className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                              hingeOpen === open ? "text-white" : "text-neutral-950"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {flyout === "finish" ? (
+                  <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Finish">
+                    {device.finishes.map((item) => (
+                      <ColorSwatch
+                        key={item.id}
+                        selected={item.id === finish.id}
+                        label={item.label}
+                        background={item.color}
+                        onClick={() => setFinishId(item.id)}
+                      />
                     ))}
                   </div>
-                </div>
-              ) : null}
-              <label className="flex flex-col gap-2">
-                <span className="flex items-center justify-between text-[13px]">
-                  <span className="text-neutral-500">Light</span>
-                  <span className="tabular-nums">{light.toFixed(1)}</span>
-                </span>
-                <Slider
-                  value={[light]}
-                  min={0}
-                  max={2}
-                  step={0.01}
-                  onValueChange={(value) => {
-                    const next = Array.isArray(value) ? value[0] : value;
-                    setLight(next);
-                  }}
-                  aria-label="Light"
-                />
-              </label>
-              {deviceId === "iphone-duo" || device.kind === "laptop" ? (
-                <div
-                  className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5"
-                  role="group"
-                  aria-label={device.kind === "laptop" ? "Lid" : "Duo"}
-                >
-                  <span
-                    aria-hidden
-                    className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
-                      hingeOpen ? "translate-x-full" : "translate-x-0"
-                    }`}
-                  />
-                  {(
-                    [
-                      [false, "Close"],
-                      [true, "Open"],
-                    ] as const
-                  ).map(([open, label]) => (
-                    <button
-                      key={label}
+                ) : null}
+                {flyout === "background" ? (
+                  <div className="flex flex-col gap-2.5">
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      aria-label="Upload a background image"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (!file || !file.type.startsWith("image/")) return;
+                        const next = URL.createObjectURL(file);
+                        setCustomBg(next);
+                        setUseCustom(true);
+                        setOpenGroup(null);
+                      }}
+                    />
+                    <Button
                       type="button"
-                      aria-pressed={hingeOpen === open}
-                      onClick={() => setHinge(open)}
-                      className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                        hingeOpen === open ? "text-white" : "text-neutral-950"
-                      }`}
+                      variant={useCustom ? "default" : "outline"}
+                      className="h-8 border-[#ebebeb] px-2 text-[13px]"
+                      onClick={() => fileRef.current?.click()}
                     >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <p className="px-4 pb-3 text-[11px] text-neutral-400">
-              By{" "}
-              <a
-                href="https://www.linkedin.com/in/angelsanchezcaceres/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-neutral-400 hover:text-neutral-500"
+                      Upload image
+                    </Button>
+                    <div className="flex flex-wrap gap-2 p-1" role="listbox" aria-label="Solid backgrounds">
+                      {SOLID_BACKGROUNDS.map((item) => (
+                        <ColorSwatch
+                          key={item.id}
+                          selected={!useCustom && background === item.id}
+                          label={item.label}
+                          background={item.css}
+                          onClick={() => {
+                            setUseCustom(false);
+                            setOpenGroup(null);
+                            setBackground(item.id);
+                          }}
+                        />
+                      ))}
+                    </div>
+                    {GRADIENT_GROUPS.map((group) => {
+                      const open = openGroup === group.label;
+                      return (
+                        <div key={group.label}>
+                          <button
+                            type="button"
+                            aria-expanded={open}
+                            className="flex w-full items-center justify-between text-left text-[12px] text-neutral-500"
+                            onClick={() => setOpenGroup(open ? null : group.label)}
+                          >
+                            {group.label}
+                            <ChevronDown
+                              className={`size-3.5 transition-transform ${QUIET} ${open ? "rotate-180" : ""}`}
+                            />
+                          </button>
+                          <div
+                            className={`grid transition-[grid-template-rows,opacity] ${QUIET} ${
+                              open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                            }`}
+                          >
+                            <div className="overflow-hidden" inert={open ? undefined : true}>
+                              <div className="flex flex-wrap gap-1.5 p-1 pt-1.5" role="listbox" aria-label={group.label}>
+                                {group.items.map((item) => (
+                                  <ColorSwatch
+                                    key={item.id}
+                                    size="sm"
+                                    selected={!useCustom && background === item.id}
+                                    label={group.label}
+                                    background={item.css}
+                                    onClick={() => {
+                                      setUseCustom(false);
+                                      setOpenGroup(group.label);
+                                      setBackground(item.id);
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {flyout === "scene" ? (
+                  <div className="flex flex-col gap-3">
+                    <label className="flex flex-col gap-2">
+                      <span className="flex items-center justify-between text-[13px]">
+                        <span className="text-neutral-500">Light</span>
+                        <span className="tabular-nums">{light.toFixed(1)}</span>
+                      </span>
+                      <Slider
+                        value={[light]}
+                        min={0}
+                        max={2}
+                        step={0.01}
+                        onValueChange={(value) => {
+                          const next = Array.isArray(value) ? value[0] : value;
+                          setLight(next);
+                        }}
+                        aria-label="Light"
+                      />
+                    </label>
+                    <ToggleRow label="Logo light" checked={logoLight} onChange={setLogoLight} />
+                    <ToggleRow label="Auto-rotate" checked={autoRotate} onChange={setAutoRotate} />
+                  </div>
+                ) : null}
+                {flyout === "cinematics" ? (
+                  <div className="flex flex-col gap-1">
+                    {CINEMATICS.map((item) => {
+                      const playing = cinematic?.id === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          aria-pressed={playing}
+                          onClick={() => {
+                            cinematicToken.current += 1;
+                            setCinematic({ id: item.id, token: cinematicToken.current });
+                          }}
+                          className={`h-8 rounded-md px-2.5 text-left text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                            playing ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-100"
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {flyout === "export" ? (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => exportRef.current?.("png")}>
+                      PNG
+                    </Button>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("transparent")}>
+                      Transparent
+                    </Button>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("square")}>
+                      Square
+                    </Button>
+                    <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("story")}>
+                      Story
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {hint && shellMode === "rail" && !flyout ? (
+              <div
+                role="tooltip"
+                className="pointer-events-none absolute left-[calc(100%+8px)] z-30 -translate-y-1/2 rounded-md bg-neutral-950 px-2 py-1 text-[12px] whitespace-nowrap text-white"
+                style={{ top: hint.top }}
               >
-                @angelcreative
-              </a>
-            </p>
+                {hint.label}
+              </div>
+            ) : null}
           </div>
-          <div className="pointer-events-auto w-full max-w-[220px] rounded-xl border border-[#ebebeb] bg-white p-3">
-            <span className="text-[13px] text-neutral-500">Save image</span>
-            <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => exportRef.current?.("png")}>
-                PNG
-              </Button>
-              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("transparent")}>
-                Transparent
-              </Button>
-              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("square")}>
-                Square
-              </Button>
-              <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => exportRef.current?.("story")}>
-                Story
-              </Button>
-            </div>
-          </div>
-        </div>
-      </main>
+        </>
+      ) : null}
     </div>
   );
 }
