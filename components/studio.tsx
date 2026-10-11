@@ -682,6 +682,13 @@ export function Studio() {
                 expanded ? "w-[212px]" : "w-12"
               } ${shellMode === "icon" ? "-translate-x-2 opacity-0" : "translate-x-0 opacity-100"}`}
             >
+              <div className="px-1.5 pt-1.5">
+                <div className="flex h-9 items-center">
+                  <span className="grid size-9 shrink-0 place-items-center">
+                    <img src="/icons/positivo.svg" alt="" className="size-5" />
+                  </span>
+                </div>
+              </div>
               <nav className="flex flex-col gap-0.5 p-1.5" aria-label="Controls">
                 {GROUPS.map((group) => {
                   const open = flyout === group.id;
