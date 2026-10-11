@@ -69,6 +69,7 @@ function useDeviceTexture(
   orientation: Orientation,
   designImage: HTMLImageElement | null,
   designHold: boolean,
+  designPending: boolean,
 ) {
   const canvas = useState(() => document.createElement("canvas"))[0];
   const leftCanvas = useState(() => document.createElement("canvas"))[0];
@@ -84,19 +85,33 @@ function useDeviceTexture(
   const paintRef = useRef<(revealValue: number, spinValue: number) => void>(() => undefined);
   const designRef = useRef(designImage);
   const designHoldRef = useRef(designHold);
+  const designPendingRef = useRef(designPending);
+  const sourceKeyRef = useRef("");
   designRef.current = designImage;
   designHoldRef.current = designHold;
+  designPendingRef.current = designPending;
+  const sourceKey = !designHold
+    ? "live"
+    : designImage
+      ? `ready:${designImage.src}`
+      : designPending
+        ? "loading"
+        : "empty";
 
   const paint = (revealValue: number, spinValue: number) => {
     const design = designRef.current;
     if (designHoldRef.current) {
-      if (design && design.naturalWidth > 0 && design.naturalHeight > 0) {
-        paintDesign(canvas, bounds.width, bounds.height, design, design.naturalWidth, design.naturalHeight);
-      } else {
-        paintDesign(canvas, bounds.width, bounds.height, design ?? canvas, 0, 0);
-      }
-      reveal.current = 1;
-      fadeStart.current = null;
+      const ready = design && design.naturalWidth > 0 && design.naturalHeight > 0 ? design : null;
+      paintDesign(
+        canvas,
+        bounds.width,
+        bounds.height,
+        ready,
+        ready?.naturalWidth ?? 0,
+        ready?.naturalHeight ?? 0,
+        designPendingRef.current && !ready ? 0 : revealValue,
+        spinValue,
+      );
     } else {
       if (frame && (frame.width < 1 || frame.height < 1)) return;
       paintScreen(
@@ -127,16 +142,34 @@ function useDeviceTexture(
   paintRef.current = paint;
 
   useLayoutEffect(() => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const showing = Boolean(frame && frame.width >= 1 && frame.height >= 1);
-    if (!showing) {
-      reveal.current = 0;
-      fadeStart.current = null;
-    } else if (reveal.current < 1 && fadeStart.current === null) {
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        reveal.current = 1;
-      } else {
-        fadeStart.current = performance.now();
+    if (!sourceKeyRef.current) {
+      sourceKeyRef.current = sourceKey;
+    } else if (sourceKeyRef.current !== sourceKey) {
+      sourceKeyRef.current = sourceKey;
+      const waiting = sourceKey === "loading" || (sourceKey === "live" && !showing);
+      if (waiting) {
         reveal.current = 0;
+        fadeStart.current = null;
+      } else if (reduce) {
+        reveal.current = 1;
+        fadeStart.current = null;
+      } else {
+        reveal.current = 0;
+        fadeStart.current = performance.now();
+      }
+    } else if (!designHold) {
+      if (!showing) {
+        reveal.current = 0;
+        fadeStart.current = null;
+      } else if (reveal.current < 1 && fadeStart.current === null) {
+        if (reduce) {
+          reveal.current = 1;
+        } else {
+          fadeStart.current = performance.now();
+          reveal.current = 0;
+        }
       }
     }
     paint(reveal.current, spin.current);
@@ -158,14 +191,15 @@ function useDeviceTexture(
     rightTexture,
     designHold,
     designImage,
+    designPending,
+    sourceKey,
     status,
     texture,
   ]);
 
   useFrame((_, delta) => {
-    if (designHoldRef.current) return;
     if (reveal.current >= 1 && fadeStart.current === null) return;
-    if (status === "error" || status === "empty") return;
+    if (!designHoldRef.current && (status === "error" || status === "empty")) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!reduce) spin.current = (spin.current + delta * 3.4) % (Math.PI * 2);
     if (fadeStart.current !== null) {
@@ -1256,6 +1290,7 @@ function Stage({
   insetLeft,
   designImage,
   designHold,
+  designPending,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1276,6 +1311,7 @@ function Stage({
   insetLeft: number;
   designImage: HTMLImageElement | null;
   designHold: boolean;
+  designPending: boolean;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
@@ -1287,6 +1323,7 @@ function Stage({
     orientation,
     designImage,
     designHold,
+    designPending,
   );
   const viewport = liveViewport(device, apertura, orientation);
   const span = deviceSpan(device, apertura);
@@ -1375,6 +1412,7 @@ export default function Scene({
   insetLeft,
   designImage,
   designHold,
+  designPending,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1395,6 +1433,7 @@ export default function Scene({
   insetLeft: number;
   designImage: HTMLImageElement | null;
   designHold: boolean;
+  designPending: boolean;
 }) {
   return (
     <Canvas
@@ -1434,6 +1473,7 @@ export default function Scene({
           insetLeft={insetLeft}
           designImage={designImage}
           designHold={designHold}
+          designPending={designPending}
         />
       </Suspense>
     </Canvas>

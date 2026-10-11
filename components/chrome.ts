@@ -299,9 +299,11 @@ export function paintDesign(
   canvas: HTMLCanvasElement,
   cssWidth: number,
   cssHeight: number,
-  image: CanvasImageSource,
+  image: CanvasImageSource | null,
   imageWidth: number,
   imageHeight: number,
+  reveal = 1,
+  spin = 0,
 ) {
   const scale = 2;
   const width = Math.max(2, Math.round(cssWidth * scale));
@@ -311,10 +313,25 @@ export function paintDesign(
   const context = canvas.getContext("2d");
   if (!context) return;
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#000000";
+  context.fillStyle = "#f7f7f7";
   context.fillRect(0, 0, width, height);
-  if (imageWidth < 1 || imageHeight < 1) return;
-  drawContain(context, image, 0, 0, width, height, imageWidth, imageHeight);
+  const hasImage = Boolean(image) && imageWidth > 0 && imageHeight > 0;
+  if (reveal < 1) drawLoader(context, 0, 0, width, height, spin);
+  if (hasImage && image && reveal > 0) {
+    context.save();
+    context.globalAlpha = reveal;
+    context.fillStyle = "#000000";
+    context.fillRect(0, 0, width, height);
+    drawContain(context, image, 0, 0, width, height, imageWidth, imageHeight);
+    context.restore();
+    return;
+  }
+  if (!hasImage && reveal > 0) {
+    context.save();
+    context.globalAlpha = reveal;
+    drawMessage(context, "empty", "Upload a design for this screen", 0, 0, width, height);
+    context.restore();
+  }
 }
 
 export function paintScreen(

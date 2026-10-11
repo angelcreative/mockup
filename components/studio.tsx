@@ -236,6 +236,7 @@ export function Studio() {
   const [screenSource, setScreenSource] = useState<"live" | "design">("live");
   const [designImage, setDesignImage] = useState<HTMLImageElement | null>(null);
   const [designError, setDesignError] = useState<string | null>(null);
+  const [designFailed, setDesignFailed] = useState<string | null>(null);
   const designInputs = useRef<Partial<Record<DesignFamily, HTMLInputElement | null>>>({});
   const shellRef = useRef<HTMLDivElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
@@ -368,9 +369,13 @@ export function Studio() {
     };
   }, []);
 
+  const designUrl = screenSource === "design" ? designs[designFamily(device)] ?? null : null;
+  const designReady = Boolean(
+    designImage && designUrl && designImage.src === designUrl && designImage.naturalWidth > 0,
+  );
+
   useEffect(() => {
-    const url = screenSource === "design" ? designs[designFamily(device)] : null;
-    if (!url) {
+    if (!designUrl) {
       setDesignImage(null);
       return;
     }
@@ -379,11 +384,18 @@ export function Studio() {
     image.onload = () => {
       if (!cancelled) setDesignImage(image);
     };
-    image.src = url;
+    image.onerror = () => {
+      if (!cancelled) {
+        setDesignImage(null);
+        setDesignFailed(designUrl);
+        setDesignError("That image could not be read.");
+      }
+    };
+    image.src = designUrl;
     return () => {
       cancelled = true;
     };
-  }, [designs, device, screenSource]);
+  }, [designUrl]);
 
   useEffect(() => {
     const onResize = () => setStageWidth(window.innerWidth);
@@ -459,7 +471,7 @@ export function Studio() {
   }
 
   function sendInput(input: ScreenInput) {
-    if (screenSource === "design" && designs[designFamily(device)]) return;
+    if (screenSource === "design") return;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
     socket.send(JSON.stringify({ type: "input", ...input }));
@@ -635,8 +647,11 @@ export function Studio() {
           exportRef={exportRef}
           onInput={sendInput}
           insetLeft={glassClearance}
-          designImage={designImage}
-          designHold={screenSource === "design" && Boolean(designs[designFamily(device)])}
+          designImage={designReady ? designImage : null}
+          designHold={screenSource === "design"}
+          designPending={
+            screenSource === "design" && Boolean(designUrl) && !designReady && designFailed !== designUrl
+          }
         />
       </div>
 
@@ -771,9 +786,38 @@ export function Studio() {
               >
                 <p className="mb-2.5 text-[13px] text-neutral-500">{flyoutLabel}</p>
                 {flyout === "page" ? (
-                  <div className="flex flex-col gap-4">
-                    <div>
-                      <p className="mb-2 text-[13px] text-neutral-950">Add URL</p>
+                  <div className="flex flex-col gap-3">
+                    <div
+                      className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5"
+                      role="group"
+                      aria-label="Screen source"
+                    >
+                      <span
+                        aria-hidden
+                        className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-neutral-950 transition-transform ${QUIET} ${
+                          screenSource === "design" ? "translate-x-full" : "translate-x-0"
+                        }`}
+                      />
+                      {(
+                        [
+                          ["live", "Live URL"],
+                          ["design", "Upload design"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={screenSource === value}
+                          onClick={() => setScreenSource(value)}
+                          className={`relative z-10 h-8 rounded-md text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                            screenSource === value ? "text-white" : "text-neutral-950"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {screenSource === "live" ? (
                       <form onSubmit={openPage} className="flex items-center gap-2">
                         <Input
                           value={url}
@@ -790,68 +834,62 @@ export function Studio() {
                           {opening ? "Opening…" : "Open"}
                         </Button>
                       </form>
-                    </div>
-                    <div>
-                      <p className="mb-2 text-[13px] text-neutral-950">Upload your design</p>
-                      <div className="flex flex-col gap-1">
-                        {DESIGN_ROWS.map((row) => {
-                          const size = familyGlassSize(row.id, device, apertura);
-                          const fileUrl = designs[row.id];
-                          const showing =
-                            screenSource === "design" && designFamily(device) === row.id && Boolean(fileUrl);
-                          return (
-                            <div
-                              key={row.id}
-                              className={`flex items-center gap-2 rounded-lg px-1.5 py-1.5 ${showing ? "bg-neutral-100" : ""}`}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="text-[13px] text-neutral-950">{row.label}</p>
-                                <p className="text-[12px] text-neutral-500">
-                                  {size.width} × {size.height}
-                                </p>
-                                <p className="text-[11px] text-neutral-400">
-                                  export {size.width * 2} × {size.height * 2}
-                                </p>
-                              </div>
-                              {fileUrl ? (
-                                <button
-                                  type="button"
-                                  aria-label={`Show ${row.label} design`}
-                                  onClick={() => setScreenSource("design")}
-                                  className="size-8 shrink-0 overflow-hidden rounded-md bg-neutral-950 outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
-                                >
-                                  <img src={fileUrl} alt="" className="size-full object-contain" />
-                                </button>
-                              ) : null}
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="xs"
-                                className="border-[#ebebeb] px-2"
-                                onClick={() => designInputs.current[row.id]?.click()}
+                    ) : (
+                      <div>
+                        <div className="flex flex-col gap-1">
+                          {DESIGN_ROWS.map((row) => {
+                            const size = familyGlassSize(row.id, device, apertura);
+                            const fileUrl = designs[row.id];
+                            const active = designFamily(device) === row.id;
+                            return (
+                              <div
+                                key={row.id}
+                                className={`flex items-center gap-2 rounded-lg px-1.5 py-1.5 ${active ? "bg-neutral-100" : ""}`}
                               >
-                                {fileUrl ? "Replace" : "Upload"}
-                              </Button>
-                              <input
-                                ref={(node) => {
-                                  designInputs.current[row.id] = node;
-                                }}
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-                                aria-label={`Upload ${row.label} design`}
-                                className="sr-only"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0];
-                                  event.target.value = "";
-                                  chooseDesign(row.id, file);
-                                }}
-                              />
-                            </div>
-                          );
-                        })}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[13px] text-neutral-950">{row.label}</p>
+                                  <p className="text-[12px] text-neutral-500">
+                                    {size.width} × {size.height}
+                                  </p>
+                                  <p className="text-[11px] text-neutral-400">
+                                    export {size.width * 2} × {size.height * 2}
+                                  </p>
+                                </div>
+                                {fileUrl ? (
+                                  <span className="size-8 shrink-0 overflow-hidden rounded-md bg-neutral-950">
+                                    <img src={fileUrl} alt="" className="size-full object-contain" />
+                                  </span>
+                                ) : null}
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  className="border-[#ebebeb] px-2"
+                                  onClick={() => designInputs.current[row.id]?.click()}
+                                >
+                                  {fileUrl ? "Replace" : "Upload"}
+                                </Button>
+                                <input
+                                  ref={(node) => {
+                                    designInputs.current[row.id] = node;
+                                  }}
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                                  aria-label={`Upload ${row.label} design`}
+                                  className="sr-only"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    event.target.value = "";
+                                    chooseDesign(row.id, file);
+                                  }}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {designError ? <p className="mt-2 text-[12px] text-neutral-500">{designError}</p> : null}
                       </div>
-                      {designError ? <p className="mt-2 text-[12px] text-neutral-500">{designError}</p> : null}
-                    </div>
+                    )}
                   </div>
                 ) : null}
                 {flyout === "device" ? (
