@@ -107,11 +107,14 @@ function mouseButton(button: number | undefined): "left" | "middle" | "right" {
   return "left";
 }
 
-function bindScreencast(session: Session, profile: ViewportProfile) {
+async function bindScreencast(session: Session, profile: ViewportProfile) {
   const cdp = session.cdp;
   const ws = session.ws;
   if (!cdp) return;
-  session.unbind?.();
+  // Chromium rejects Page.startScreencast while one is already active. A resize
+  // keeps the page, so the previous cast is still running.
+  await stopScreencast(session);
+  if (session.closed || session.cdp !== cdp) return;
   const onFrame = (event: ScreencastFrame) => {
     void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
     if (session.closed || ws.readyState !== ws.OPEN) return;
@@ -339,7 +342,13 @@ export function attachLiveSocket(ws: WebSocket) {
             send(ws, { type: "error", message: "Screen size is not allowed" });
             return;
           }
-          await show(session, profile, session.url, false);
+          try {
+            await show(session, profile, session.url, false);
+          } catch (error) {
+            if (error instanceof CaptureError) throw error;
+            if (session.closed || session.paused || !session.profile) return;
+            await bindScreencast(session, session.profile).catch(() => undefined);
+          }
           return;
         }
         await handleInput(session, parsed);
