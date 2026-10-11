@@ -81,6 +81,32 @@ const DEFAULT_URL = "https://www.apple.com";
 const QUIET = "duration-200 ease-out motion-reduce:transition-none";
 const MOTION = "duration-[240ms] ease-out motion-reduce:transition-none";
 const MARK_MOTION = "duration-[400ms] ease-out motion-reduce:transition-none";
+const MARK_FADE = "duration-500 ease-out motion-reduce:transition-none";
+
+function imageIsDark(image: HTMLImageElement) {
+  const size = 24;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context || image.naturalWidth < 1 || image.naturalHeight < 1) return false;
+  context.drawImage(image, 0, 0, size, size);
+  const data = context.getImageData(0, 0, size, size).data;
+  let sum = 0;
+  let weight = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const alpha = data[index + 3] / 255;
+    if (alpha < 0.08) continue;
+    const channel = (value: number) => {
+      const unit = value / 255;
+      return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = 0.2126 * channel(data[index]) + 0.7152 * channel(data[index + 1]) + 0.0722 * channel(data[index + 2]);
+    sum += luminance * alpha;
+    weight += alpha;
+  }
+  return weight > 0 && sum / weight < 0.5;
+}
 const SHELL_KEY = "mockup-shell";
 
 type ShellMode = "icon" | "rail" | "expanded";
@@ -204,6 +230,7 @@ export function Studio() {
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [customBg, setCustomBg] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
+  const [customDark, setCustomDark] = useState<boolean | null>(null);
   const [finishId, setFinishId] = useState(DEVICES[0].finishes[0].id);
   const [light, setLight] = useState(1);
   const [autoRotate, setAutoRotate] = useState(false);
@@ -343,6 +370,22 @@ export function Studio() {
       if (customBg) URL.revokeObjectURL(customBg);
     };
   }, [customBg]);
+
+  useEffect(() => {
+    if (!useCustom || !customBg) return;
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled) setCustomDark(imageIsDark(image));
+    };
+    image.onerror = () => {
+      if (!cancelled) setCustomDark(false);
+    };
+    image.src = customBg;
+    return () => {
+      cancelled = true;
+    };
+  }, [customBg, useCustom]);
 
   useEffect(() => {
     setCinematic(null);
@@ -633,6 +676,7 @@ export function Studio() {
     }
   }
 
+  const markOnLight = useCustom ? customDark !== true : background === "blanco" || background === "niebla";
   const expanded = shellMode === "expanded";
   const glassClearance = stageWidth < 900 && shellMode !== "icon" ? 72 : 0;
   const hinge = deviceId === "iphone-duo" || device.kind === "laptop";
@@ -672,11 +716,24 @@ export function Studio() {
         tabIndex={0}
         className="group absolute top-4 left-4 z-40 flex h-9 items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
       >
-        <img src="/icons/positivo.svg" alt="" className="size-5 shrink-0" />
+        <span className="relative size-5 shrink-0">
+          <img
+            src="/icons/positivo.svg"
+            alt=""
+            className={`absolute inset-0 size-5 transition-opacity ${MARK_FADE} ${markOnLight ? "opacity-100" : "opacity-0"}`}
+          />
+          <img
+            src="/icons/negativo.svg"
+            alt=""
+            className={`absolute inset-0 size-5 transition-opacity ${MARK_FADE} ${markOnLight ? "opacity-0" : "opacity-100"}`}
+          />
+        </span>
         <span
-          className={`overflow-hidden text-[13px] whitespace-nowrap text-neutral-950 transition-[max-width,opacity] ${MARK_MOTION} max-w-0 opacity-0 group-hover:max-w-40 group-hover:opacity-100 group-focus-visible:max-w-40 group-focus-visible:opacity-100`}
+          className={`overflow-hidden text-[13px] whitespace-nowrap transition-[max-width,opacity] ${MARK_MOTION} max-w-0 opacity-0 group-hover:max-w-40 group-hover:opacity-100 group-focus-visible:max-w-40 group-focus-visible:opacity-100`}
         >
-          <span className="pl-2">Live Mockup</span>
+          <span className={`pl-2 transition-colors ${MARK_FADE} ${markOnLight ? "text-neutral-950" : "text-white"}`}>
+            Live Mockup
+          </span>
         </span>
       </div>
 
