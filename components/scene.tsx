@@ -8,7 +8,7 @@ import * as THREE from "three";
 import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
 import { BACKGROUNDS, duoScreen, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceScreenSize, deviceSpan } from "@/components/devices";
-import { paintScreen } from "@/components/chrome";
+import { paintDesign, paintScreen } from "@/components/chrome";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 
 export type ScreenInput =
@@ -67,6 +67,8 @@ function useDeviceTexture(
   time: string,
   apertura: number,
   orientation: Orientation,
+  designImage: HTMLImageElement | null,
+  designHold: boolean,
 ) {
   const canvas = useState(() => document.createElement("canvas"))[0];
   const leftCanvas = useState(() => document.createElement("canvas"))[0];
@@ -80,24 +82,39 @@ function useDeviceTexture(
   const spin = useRef(0);
   const fadeStart = useRef<number | null>(null);
   const paintRef = useRef<(revealValue: number, spinValue: number) => void>(() => undefined);
+  const designRef = useRef(designImage);
+  const designHoldRef = useRef(designHold);
+  designRef.current = designImage;
+  designHoldRef.current = designHold;
 
   const paint = (revealValue: number, spinValue: number) => {
-    if (frame && (frame.width < 1 || frame.height < 1)) return;
-    paintScreen(
-      canvas,
-      device,
-      frame,
-      frame?.width ?? 0,
-      frame?.height ?? 0,
-      status,
-      message,
-      bounds.width,
-      bounds.height,
-      isComputer(device) ? "portrait" : orientation,
-      time,
-      revealValue,
-      spinValue,
-    );
+    const design = designRef.current;
+    if (designHoldRef.current) {
+      if (design && design.naturalWidth > 0 && design.naturalHeight > 0) {
+        paintDesign(canvas, bounds.width, bounds.height, design, design.naturalWidth, design.naturalHeight);
+      } else {
+        paintDesign(canvas, bounds.width, bounds.height, design ?? canvas, 0, 0);
+      }
+      reveal.current = 1;
+      fadeStart.current = null;
+    } else {
+      if (frame && (frame.width < 1 || frame.height < 1)) return;
+      paintScreen(
+        canvas,
+        device,
+        frame,
+        frame?.width ?? 0,
+        frame?.height ?? 0,
+        status,
+        message,
+        bounds.width,
+        bounds.height,
+        isComputer(device) ? "portrait" : orientation,
+        time,
+        revealValue,
+        spinValue,
+      );
+    }
     if (bounds.split) {
       copyPanel(canvas, leftCanvas, "left");
       copyPanel(canvas, rightCanvas, "right");
@@ -139,11 +156,14 @@ function useDeviceTexture(
     orientation,
     rightCanvas,
     rightTexture,
+    designHold,
+    designImage,
     status,
     texture,
   ]);
 
   useFrame((_, delta) => {
+    if (designHoldRef.current) return;
     if (reveal.current >= 1 && fadeStart.current === null) return;
     if (status === "error" || status === "empty") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1234,6 +1254,8 @@ function Stage({
   exportRef,
   onInput,
   insetLeft,
+  designImage,
+  designHold,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1252,6 +1274,8 @@ function Stage({
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
   insetLeft: number;
+  designImage: HTMLImageElement | null;
+  designHold: boolean;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
@@ -1261,6 +1285,8 @@ function Stage({
     time,
     apertura,
     orientation,
+    designImage,
+    designHold,
   );
   const viewport = liveViewport(device, apertura, orientation);
   const span = deviceSpan(device, apertura);
@@ -1347,6 +1373,8 @@ export default function Scene({
   exportRef,
   onInput,
   insetLeft,
+  designImage,
+  designHold,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1365,6 +1393,8 @@ export default function Scene({
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
   insetLeft: number;
+  designImage: HTMLImageElement | null;
+  designHold: boolean;
 }) {
   return (
     <Canvas
@@ -1402,6 +1432,8 @@ export default function Scene({
           exportRef={exportRef}
           onInput={onInput}
           insetLeft={insetLeft}
+          designImage={designImage}
+          designHold={designHold}
         />
       </Suspense>
     </Canvas>

@@ -31,11 +31,15 @@ import { Slider } from "@/components/ui/slider";
 import type { CinematicId, CinematicShot, ScreenInput, ShotMode } from "@/components/scene";
 import {
   BACKGROUNDS,
+  DESIGN_ROWS,
   DEVICES,
+  designFamily,
   deviceById,
+  familyGlassSize,
   isDeviceId,
   liveViewport,
   type BackgroundId,
+  type DesignFamily,
   type DeviceId,
   type Orientation,
   type ScreenState,
@@ -52,6 +56,18 @@ const EMPTY_SCREEN: ScreenState = {
   status: "empty",
   message: "Paste a URL to open the site",
 };
+
+const EMPTY_DESIGNS: Record<DesignFamily, string | null> = {
+  mobile: null,
+  tablet: null,
+  laptop: null,
+  desktop: null,
+};
+
+function isDesignFile(file: File) {
+  if (file.type === "image/png" || file.type === "image/jpeg" || file.type === "image/webp") return true;
+  return /\.(png|jpe?g|webp)$/i.test(file.name);
+}
 
 function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) {
   const scales = width * height > 600_000 ? [1] : [1, 2];
@@ -216,6 +232,11 @@ export function Studio() {
   const [flyout, setFlyout] = useState<GroupId | null>(null);
   const [flyoutTop, setFlyoutTop] = useState(0);
   const [hint, setHint] = useState<{ label: string; top: number } | null>(null);
+  const [designs, setDesigns] = useState(EMPTY_DESIGNS);
+  const [screenSource, setScreenSource] = useState<"live" | "design">("live");
+  const [designImage, setDesignImage] = useState<HTMLImageElement | null>(null);
+  const [designError, setDesignError] = useState<string | null>(null);
+  const designInputs = useRef<Partial<Record<DesignFamily, HTMLInputElement | null>>>({});
   const shellRef = useRef<HTMLDivElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const iconButtonRef = useRef<HTMLButtonElement>(null);
@@ -337,6 +358,33 @@ export function Studio() {
     setShellMode(readShellMode());
   }, []);
 
+  const designsRef = useRef(designs);
+  designsRef.current = designs;
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(designsRef.current)) {
+        if (url) URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const url = screenSource === "design" ? designs[designFamily(device)] : null;
+    if (!url) {
+      setDesignImage(null);
+      return;
+    }
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled) setDesignImage(image);
+    };
+    image.src = url;
+    return () => {
+      cancelled = true;
+    };
+  }, [designs, device, screenSource]);
+
   useEffect(() => {
     const onResize = () => setStageWidth(window.innerWidth);
     onResize();
@@ -394,7 +442,24 @@ export function Studio() {
     };
   }, [flyout, shellMode, openGroup, deviceId, orientation]);
 
+  function chooseDesign(family: DesignFamily, file: File | undefined) {
+    if (!file) return;
+    if (!isDesignFile(file)) {
+      setDesignError("Use a png, jpg, or webp.");
+      return;
+    }
+    const next = URL.createObjectURL(file);
+    setDesigns((current) => {
+      const previous = current[family];
+      if (previous) URL.revokeObjectURL(previous);
+      return { ...current, [family]: next };
+    });
+    setDesignError(null);
+    setScreenSource("design");
+  }
+
   function sendInput(input: ScreenInput) {
+    if (screenSource === "design" && designs[designFamily(device)]) return;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
     socket.send(JSON.stringify({ type: "input", ...input }));
@@ -495,6 +560,7 @@ export function Studio() {
     }
 
     rememberFrame(null);
+    setScreenSource("live");
     setScreen({ status: "loading", message: "Opening…" });
     attachSocket(normalized, viewport.width, viewport.height);
   }
@@ -569,6 +635,8 @@ export function Studio() {
           exportRef={exportRef}
           onInput={sendInput}
           insetLeft={glassClearance}
+          designImage={designImage}
+          designHold={screenSource === "design" && Boolean(designs[designFamily(device)])}
         />
       </div>
 
@@ -703,22 +771,88 @@ export function Studio() {
               >
                 <p className="mb-2.5 text-[13px] text-neutral-500">{flyoutLabel}</p>
                 {flyout === "page" ? (
-                  <form onSubmit={openPage} className="flex items-center gap-2">
-                    <Input
-                      value={url}
-                      onChange={(event) => setUrl(event.target.value)}
-                      placeholder={DEFAULT_URL}
-                      aria-label="Site URL"
-                      inputMode="url"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
-                    />
-                    <Button type="submit" disabled={opening} className="h-9 shrink-0 px-3.5">
-                      {opening ? "Opening…" : "Open"}
-                    </Button>
-                  </form>
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <p className="mb-2 text-[13px] text-neutral-950">Add URL</p>
+                      <form onSubmit={openPage} className="flex items-center gap-2">
+                        <Input
+                          value={url}
+                          onChange={(event) => setUrl(event.target.value)}
+                          placeholder={DEFAULT_URL}
+                          aria-label="Site URL"
+                          inputMode="url"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
+                        />
+                        <Button type="submit" disabled={opening} className="h-9 shrink-0 px-3.5">
+                          {opening ? "Opening…" : "Open"}
+                        </Button>
+                      </form>
+                    </div>
+                    <div>
+                      <p className="mb-2 text-[13px] text-neutral-950">Upload your design</p>
+                      <div className="flex flex-col gap-1">
+                        {DESIGN_ROWS.map((row) => {
+                          const size = familyGlassSize(row.id, device, apertura);
+                          const fileUrl = designs[row.id];
+                          const showing =
+                            screenSource === "design" && designFamily(device) === row.id && Boolean(fileUrl);
+                          return (
+                            <div
+                              key={row.id}
+                              className={`flex items-center gap-2 rounded-lg px-1.5 py-1.5 ${showing ? "bg-neutral-100" : ""}`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[13px] text-neutral-950">{row.label}</p>
+                                <p className="text-[12px] text-neutral-500">
+                                  {size.width} × {size.height}
+                                </p>
+                                <p className="text-[11px] text-neutral-400">
+                                  export {size.width * 2} × {size.height * 2}
+                                </p>
+                              </div>
+                              {fileUrl ? (
+                                <button
+                                  type="button"
+                                  aria-label={`Show ${row.label} design`}
+                                  onClick={() => setScreenSource("design")}
+                                  className="size-8 shrink-0 overflow-hidden rounded-md bg-neutral-950 outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+                                >
+                                  <img src={fileUrl} alt="" className="size-full object-contain" />
+                                </button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="xs"
+                                className="border-[#ebebeb] px-2"
+                                onClick={() => designInputs.current[row.id]?.click()}
+                              >
+                                {fileUrl ? "Replace" : "Upload"}
+                              </Button>
+                              <input
+                                ref={(node) => {
+                                  designInputs.current[row.id] = node;
+                                }}
+                                type="file"
+                                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                                aria-label={`Upload ${row.label} design`}
+                                className="sr-only"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  event.target.value = "";
+                                  chooseDesign(row.id, file);
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {designError ? <p className="mt-2 text-[12px] text-neutral-500">{designError}</p> : null}
+                    </div>
+                  </div>
                 ) : null}
                 {flyout === "device" ? (
                   <div className="flex flex-col gap-3">

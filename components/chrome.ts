@@ -295,6 +295,28 @@ function drawMessage(
   });
 }
 
+export function paintDesign(
+  canvas: HTMLCanvasElement,
+  cssWidth: number,
+  cssHeight: number,
+  image: CanvasImageSource,
+  imageWidth: number,
+  imageHeight: number,
+) {
+  const scale = 2;
+  const width = Math.max(2, Math.round(cssWidth * scale));
+  const height = Math.max(2, Math.round(cssHeight * scale));
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#000000";
+  context.fillRect(0, 0, width, height);
+  if (imageWidth < 1 || imageHeight < 1) return;
+  drawContain(context, image, 0, 0, width, height, imageWidth, imageHeight);
+}
+
 export function paintScreen(
   canvas: HTMLCanvasElement,
   device: DeviceSpec,

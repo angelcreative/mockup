@@ -451,6 +451,39 @@ export function duoScreen(apertura: number) {
   return { width: DUO_OUTER_WIDTH, height: DUO_OUTER_HEIGHT, split: false as const };
 }
 
+export type DesignFamily = "mobile" | "tablet" | "laptop" | "desktop";
+
+export const DESIGN_ROWS: readonly { id: DesignFamily; label: string; defaultId: DeviceId }[] = [
+  { id: "mobile", label: "Mobile", defaultId: "iphone-16" },
+  { id: "tablet", label: "Tablet", defaultId: "ipad-pro-13" },
+  { id: "laptop", label: "Laptop", defaultId: "macbook-pro-14" },
+  { id: "desktop", label: "Desktop", defaultId: "imac-24" },
+];
+
+export function designFamily(device: DeviceSpec): DesignFamily {
+  if (device.kind === "tablet") return "tablet";
+  if (device.kind === "laptop") return "laptop";
+  if (device.kind === "desktop") return "desktop";
+  return "mobile";
+}
+
+/** Full glass, in CSS pixels. Duo follows the fold. */
+export function glassSize(device: DeviceSpec, apertura = 0) {
+  if (device.id === "iphone-duo") {
+    const screen = duoScreen(apertura);
+    return { width: screen.width, height: screen.height };
+  }
+  return { width: device.width, height: device.height };
+}
+
+export function familyGlassSize(family: DesignFamily, stage: DeviceSpec, apertura: number) {
+  const onStage = designFamily(stage) === family;
+  const device = onStage
+    ? stage
+    : deviceById(DESIGN_ROWS.find((row) => row.id === family)?.defaultId ?? "iphone-16");
+  return glassSize(device, onStage ? apertura : 0);
+}
+
 export function contentSize(device: DeviceSpec) {
   return {
     width: device.width,
