@@ -698,22 +698,34 @@ function ExportBridge({
   return null;
 }
 
-function FrameCamera({ span }: { span: number }) {
-  const camera = useThree((state) => state.camera);
+function FrameCamera({ span, insetLeft }: { span: number; insetLeft: number }) {
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  const size = useThree((state) => state.size);
+  const invalidate = useThree((state) => state.invalidate);
   const controls = useThree((state) => state.controls) as
-    | { target: THREE.Vector3; update: () => void }
+    | { target: THREE.Vector3; update: () => void; maxDistance?: number }
     | null;
 
   useEffect(() => {
-    const distance = Math.max(13.6, span * 2.75);
+    const shift = size.width < 900 ? Math.min(insetLeft, size.width * 0.5) : 0;
+    const gutter = shift > 120 ? 24 : 8;
+    const room = Math.max(150, size.width - shift - (shift > 0 ? gutter : 0));
+    const distance = Math.max(13.6, span * 2.75) * (shift > 0 ? size.width / room : 1);
     const azimuth = 0.62;
     camera.position.set(Math.sin(azimuth) * distance, distance * 0.2, Math.cos(azimuth) * distance);
     camera.lookAt(0, 0, 0);
+    if (shift > 0 && size.height > 0) {
+      camera.setViewOffset(size.width, size.height, -shift, 0, size.width, size.height);
+    } else {
+      camera.clearViewOffset();
+    }
     if (controls) {
+      controls.maxDistance = Math.max(26, distance + 2);
       controls.target.set(0, 0, 0);
       controls.update();
     }
-  }, [camera, controls, span]);
+    invalidate();
+  }, [camera, controls, insetLeft, invalidate, size.height, size.width, span]);
 
   return null;
 }
@@ -764,18 +776,38 @@ function ScreenPointer({
 
   useEffect(() => {
     const dom = gl.domElement;
+    dom.style.touchAction = "none";
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    let dragging = false;
     let hoverFrame = 0;
+    let wheelFrame = 0;
+    let wheelX = 0;
+    let wheelY = 0;
+    let wheelCssX = 0;
+    let wheelCssY = 0;
+    type GlassDrag = {
+      id: number;
+      startClientX: number;
+      startClientY: number;
+      lastClientX: number;
+      lastClientY: number;
+      cssX: number;
+      cssY: number;
+      mxX: number;
+      mxY: number;
+      myX: number;
+      myY: number;
+      moved: boolean;
+    };
+    let drag: GlassDrag | null = null;
 
     const orbit = () => controls as { enabled?: boolean } | null;
 
-    function pick(event: PointerEvent | WheelEvent) {
+    function pickClient(clientX: number, clientY: number) {
       const rect = dom.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const targets: THREE.Object3D[] = [];
       scene.traverse((object) => {
@@ -805,62 +837,130 @@ function ScreenPointer({
       return { css, onGlass: true as const };
     }
 
-    function onPointerDown(event: PointerEvent) {
-      const hit = pick(event);
-      if (!hit) return;
-      const current = orbit();
-      if (current) current.enabled = false;
-      dragging = true;
-      if (!hit.css) return;
-      onInputRef.current({
-        action: "down",
-        x: hit.css.x,
-        y: hit.css.y,
-        button: event.button,
+    function pick(event: PointerEvent | WheelEvent) {
+      return pickClient(event.clientX, event.clientY);
+    }
+
+    function pageScale(clientX: number, clientY: number, css: { x: number; y: number }) {
+      const sample = 18;
+      const right = pickClient(clientX + sample, clientY)?.css;
+      const down = pickClient(clientX, clientY + sample)?.css;
+      const mxX = right ? (right.x - css.x) / sample : 1;
+      const mxY = right ? (right.y - css.y) / sample : 0;
+      const myX = down ? (down.x - css.x) / sample : 0;
+      const myY = down ? (down.y - css.y) / sample : 1;
+      const finite = (value: number, fallback: number) => (Number.isFinite(value) ? value : fallback);
+      return {
+        mxX: finite(mxX, 1),
+        mxY: finite(mxY, 0),
+        myX: finite(myX, 0),
+        myY: finite(myY, 1),
+      };
+    }
+
+    function queueWheel(x: number, y: number, deltaX: number, deltaY: number) {
+      wheelCssX = x;
+      wheelCssY = y;
+      wheelX += deltaX;
+      wheelY += deltaY;
+      if (wheelFrame) return;
+      wheelFrame = requestAnimationFrame(() => {
+        wheelFrame = 0;
+        const deltaX = wheelX;
+        const deltaY = wheelY;
+        wheelX = 0;
+        wheelY = 0;
+        if (Math.abs(deltaX) < 0.2 && Math.abs(deltaY) < 0.2) return;
+        onInputRef.current({
+          action: "wheel",
+          x: wheelCssX,
+          y: wheelCssY,
+          button: 0,
+          deltaX,
+          deltaY,
+        });
       });
     }
 
-    function onPointerMove(event: PointerEvent) {
-      if (event.buttons > 0 && !dragging) return;
+    function endDrag(event: PointerEvent) {
+      if (!drag || event.pointerId !== drag.id) return;
+      event.preventDefault();
+      if (!drag.moved) {
+        onInputRef.current({ action: "down", x: drag.cssX, y: drag.cssY, button: 0 });
+        onInputRef.current({ action: "up", x: drag.cssX, y: drag.cssY, button: 0 });
+      }
+      drag = null;
+      if (dom.hasPointerCapture(event.pointerId)) dom.releasePointerCapture(event.pointerId);
+      const current = orbit();
+      if (current) current.enabled = true;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      if (drag || !event.isPrimary) return;
+      if (event.pointerType !== "touch" && event.button !== 0) return;
       const hit = pick(event);
-      if (!hit) {
-        if (!dragging) {
-          const current = orbit();
-          if (current) current.enabled = true;
-        }
+      if (!hit?.css) {
+        const current = orbit();
+        if (current) current.enabled = true;
         return;
       }
-      if (!dragging) {
-        const current = orbit();
-        if (current) current.enabled = false;
+      event.preventDefault();
+      const current = orbit();
+      if (current) current.enabled = false;
+      const scale = pageScale(event.clientX, event.clientY, hit.css);
+      drag = {
+        id: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        lastClientX: event.clientX,
+        lastClientY: event.clientY,
+        cssX: hit.css.x,
+        cssY: hit.css.y,
+        ...scale,
+        moved: false,
+      };
+      dom.setPointerCapture(event.pointerId);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (drag && event.pointerId === drag.id) {
+        event.preventDefault();
+        const dx = event.clientX - drag.lastClientX;
+        const dy = event.clientY - drag.lastClientY;
+        drag.lastClientX = event.clientX;
+        drag.lastClientY = event.clientY;
+        const travel = Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY);
+        if (!drag.moved) {
+          if (travel < 8) return;
+          drag.moved = true;
+        }
+        const deltaCssX = dx * drag.mxX + dy * drag.myX;
+        const deltaCssY = dx * drag.mxY + dy * drag.myY;
+        const width = sizeRef.current.viewportWidth;
+        const height = sizeRef.current.viewportHeight;
+        drag.cssX = Math.min(width - 0.01, Math.max(0, drag.cssX + deltaCssX));
+        drag.cssY = Math.min(height - 0.01, Math.max(0, drag.cssY + deltaCssY));
+        queueWheel(drag.cssX, drag.cssY, -deltaCssX, -deltaCssY);
+        return;
       }
+      if (event.buttons > 0) return;
+      const hit = pick(event);
+      const current = orbit();
+      if (!hit) {
+        if (current) current.enabled = true;
+        return;
+      }
+      if (current) current.enabled = false;
       if (!hit.css) return;
-      if (!dragging) {
-        const now = performance.now();
-        if (now - hoverFrame < 32) return;
-        hoverFrame = now;
-      }
+      const now = performance.now();
+      if (now - hoverFrame < 32) return;
+      hoverFrame = now;
       onInputRef.current({
         action: "move",
         x: hit.css.x,
         y: hit.css.y,
         button: event.button,
       });
-    }
-
-    function onPointerUp(event: PointerEvent) {
-      const hit = pick(event);
-      if (dragging && hit?.css) {
-        onInputRef.current({
-          action: "up",
-          x: hit.css.x,
-          y: hit.css.y,
-          button: event.button,
-        });
-      }
-      dragging = false;
-      const current = orbit();
-      if (current) current.enabled = true;
     }
 
     function onWheel(event: WheelEvent) {
@@ -880,17 +980,24 @@ function ScreenPointer({
       });
     }
 
-    dom.addEventListener("pointerdown", onPointerDown, true);
-    dom.addEventListener("pointermove", onPointerMove, true);
-    dom.addEventListener("pointerup", onPointerUp, true);
-    dom.addEventListener("pointercancel", onPointerUp, true);
+    function onTouchMove(event: TouchEvent) {
+      event.preventDefault();
+    }
+
+    dom.addEventListener("pointerdown", onPointerDown, { capture: true, passive: false });
+    dom.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+    dom.addEventListener("pointerup", endDrag, { capture: true, passive: false });
+    dom.addEventListener("pointercancel", endDrag, { capture: true, passive: false });
     dom.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    dom.addEventListener("touchmove", onTouchMove, { passive: false });
     return () => {
+      if (wheelFrame) cancelAnimationFrame(wheelFrame);
       dom.removeEventListener("pointerdown", onPointerDown, true);
       dom.removeEventListener("pointermove", onPointerMove, true);
-      dom.removeEventListener("pointerup", onPointerUp, true);
-      dom.removeEventListener("pointercancel", onPointerUp, true);
+      dom.removeEventListener("pointerup", endDrag, true);
+      dom.removeEventListener("pointercancel", endDrag, true);
       dom.removeEventListener("wheel", onWheel, true);
+      dom.removeEventListener("touchmove", onTouchMove);
     };
   }, [camera, controls, gl, scene]);
 
@@ -1126,6 +1233,7 @@ function Stage({
   onCinematicEnd,
   exportRef,
   onInput,
+  insetLeft,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1143,6 +1251,7 @@ function Stage({
   onCinematicEnd: () => void;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
+  insetLeft: number;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
@@ -1167,7 +1276,7 @@ function Stage({
     <>
       <SceneBackground background={background} image={backgroundImage} />
       <ExportBridge exportRef={exportRef} />
-      <FrameCamera span={span} />
+      <FrameCamera span={span} insetLeft={insetLeft} />
       <ambientLight intensity={0.55 * light} />
       <hemisphereLight args={["#f4f4f2", "#d5d5d2", 0.4 * light]} />
       <directionalLight position={[3.4, 5.2, 4.2]} intensity={1.25 * light} />
@@ -1237,6 +1346,7 @@ export default function Scene({
   onCinematicEnd,
   exportRef,
   onInput,
+  insetLeft,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1254,6 +1364,7 @@ export default function Scene({
   onCinematicEnd: () => void;
   exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
   onInput: (input: ScreenInput) => void;
+  insetLeft: number;
 }) {
   return (
     <Canvas
@@ -1269,6 +1380,7 @@ export default function Scene({
       style={{ width: "100%", height: "100%", touchAction: "none" }}
       onCreated={({ gl }) => {
         gl.outputColorSpace = THREE.SRGBColorSpace;
+        gl.domElement.style.touchAction = "none";
       }}
     >
       <Suspense fallback={null}>
@@ -1289,6 +1401,7 @@ export default function Scene({
           onCinematicEnd={onCinematicEnd}
           exportRef={exportRef}
           onInput={onInput}
+          insetLeft={insetLeft}
         />
       </Suspense>
     </Canvas>

@@ -23,7 +23,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="es"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="h-dvh overflow-hidden bg-white font-sans text-neutral-950">
+      <body className="h-dvh overflow-hidden overscroll-none bg-white font-sans text-neutral-950">
         {children}
       </body>
     </html>

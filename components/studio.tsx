@@ -212,6 +212,7 @@ export function Studio() {
   const openedRef = useRef("");
   const sentSize = useRef("");
   const [shellMode, setShellMode] = useState<ShellMode | null>(null);
+  const [stageWidth, setStageWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
   const [flyout, setFlyout] = useState<GroupId | null>(null);
   const [flyoutTop, setFlyoutTop] = useState(0);
   const [hint, setHint] = useState<{ label: string; top: number } | null>(null);
@@ -334,6 +335,13 @@ export function Studio() {
 
   useEffect(() => {
     setShellMode(readShellMode());
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setStageWidth(window.innerWidth);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => {
@@ -536,12 +544,13 @@ export function Studio() {
   }
 
   const expanded = shellMode === "expanded";
+  const glassClearance = stageWidth < 900 && shellMode !== "icon" ? 72 : 0;
   const hinge = deviceId === "iphone-duo" || device.kind === "laptop";
   const flyoutLabel = flyout === "finish" ? `Finish · ${finish.label}` : GROUPS.find((item) => item.id === flyout)?.label;
 
   return (
     <div className="relative h-dvh overflow-hidden bg-white text-neutral-950">
-      <div className="absolute inset-0">
+      <div className="absolute inset-0 touch-none">
         <Scene
           device={device}
           screen={screen}
@@ -559,6 +568,7 @@ export function Studio() {
           onCinematicEnd={() => setCinematic(null)}
           exportRef={exportRef}
           onInput={sendInput}
+          insetLeft={glassClearance}
         />
       </div>
 
