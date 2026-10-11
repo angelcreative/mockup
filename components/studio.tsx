@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Clapperboard,
   Download,
+  EyeOff,
   Image as ImageIcon,
   Link2,
   Palette,
@@ -69,19 +70,13 @@ type ShellMode = "icon" | "rail" | "expanded";
 type GroupId = "page" | "device" | "finish" | "background" | "scene" | "cinematics" | "export";
 
 const GROUPS: { id: GroupId; label: string; icon: LucideIcon }[] = [
-  { id: "page", label: "Page", icon: Link2 },
+  { id: "page", label: "Add page url", icon: Link2 },
   { id: "device", label: "Device", icon: Smartphone },
   { id: "finish", label: "Finish", icon: Palette },
   { id: "background", label: "Background", icon: ImageIcon },
   { id: "scene", label: "Scene", icon: SunMedium },
   { id: "cinematics", label: "Cinematics", icon: Clapperboard },
   { id: "export", label: "Export", icon: Download },
-];
-
-const SHELL_MODES: { id: ShellMode; label: string; icon: LucideIcon }[] = [
-  { id: "icon", label: "Hide", icon: PanelLeftClose },
-  { id: "rail", label: "Rail", icon: PanelLeft },
-  { id: "expanded", label: "Expand", icon: PanelLeftOpen },
 ];
 
 function readShellMode(): ShellMode {
@@ -634,34 +629,42 @@ export function Studio() {
                   );
                 })}
               </nav>
-              <div
-                role="radiogroup"
-                aria-label="Sidebar"
-                className={`border-t border-[#ebebeb] ${expanded ? "grid grid-cols-3 gap-0.5 p-1.5" : "flex flex-col gap-0.5 p-1"}`}
-              >
-                {SHELL_MODES.map((item) => {
-                  const selected = shellMode === item.id;
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      aria-label={item.label}
-                      onClick={() => chooseMode(item.id)}
-                      onMouseEnter={(event) => showHint(event.currentTarget, item.label)}
-                      onMouseLeave={() => setHint(null)}
-                      onFocus={(event) => showHint(event.currentTarget, item.label)}
-                      onBlur={() => setHint(null)}
-                      className={`rounded-md outline-none transition-colors ${MOTION} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                        expanded ? "h-7 text-[12px]" : "grid h-8 place-items-center"
-                      } ${selected ? "bg-neutral-100 text-neutral-950" : "text-neutral-400 hover:text-neutral-700"}`}
-                    >
-                      {expanded ? item.label : <Icon className="size-3.5" />}
-                    </button>
-                  );
-                })}
+              <div className="flex flex-col gap-0.5 border-t border-[#ebebeb] p-1.5">
+                <button
+                  type="button"
+                  aria-label="Hide UI"
+                  onClick={() => chooseMode("icon")}
+                  onMouseEnter={(event) => showHint(event.currentTarget, "Hide UI")}
+                  onMouseLeave={() => setHint(null)}
+                  onFocus={(event) => showHint(event.currentTarget, "Hide UI")}
+                  onBlur={() => setHint(null)}
+                  className="flex h-9 w-full items-center rounded-lg text-neutral-500 outline-none transition-colors hover:bg-neutral-50 hover:text-neutral-950 focus-visible:ring-2 focus-visible:ring-neutral-400"
+                >
+                  <span className="grid size-9 shrink-0 place-items-center">
+                    <EyeOff className="size-4" />
+                  </span>
+                  <span
+                    className={`overflow-hidden text-left text-[13px] whitespace-nowrap transition-[max-width,opacity] ${MOTION} ${
+                      expanded ? "max-w-40 opacity-100" : "max-w-0 opacity-0"
+                    }`}
+                  >
+                    Hide UI
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={expanded ? "Contract" : "Expand"}
+                  onClick={() => chooseMode(expanded ? "rail" : "expanded")}
+                  onMouseEnter={(event) => showHint(event.currentTarget, expanded ? "Contract" : "Expand")}
+                  onMouseLeave={() => setHint(null)}
+                  onFocus={(event) => showHint(event.currentTarget, expanded ? "Contract" : "Expand")}
+                  onBlur={() => setHint(null)}
+                  className="flex h-9 w-full items-center rounded-lg text-neutral-500 outline-none transition-colors hover:bg-neutral-50 hover:text-neutral-950 focus-visible:ring-2 focus-visible:ring-neutral-400"
+                >
+                  <span className="grid size-9 shrink-0 place-items-center">
+                    {expanded ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+                  </span>
+                </button>
               </div>
               {expanded ? (
                 <p className="px-3 pb-2.5 text-[11px] text-neutral-400">

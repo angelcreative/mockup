@@ -296,8 +296,11 @@ function DuoMesh({
     }, [innerH, innerHalfW]),
   );
 
-  // ExtrudeGeometry's bevel makes the shell thicker than `depth` on the back face.
-  const zFront = depth / 2 + 0.08;
+  // The bevel shifts the caps: the front lip is inside +depth/2, the back lip is past -depth/2.
+  const bevel = Math.min(0.03, depth * 0.2);
+  const seat = 0.0015;
+  const frontZ = depth / 2 - bevel + seat;
+  const backZ = -(depth / 2 + bevel) - seat;
   const gap = 0.045 * apertura;
   const centerShift = (bodyW / 2) * (1 - apertura);
   const stack = (depth + 0.07) * (1 - apertura);
@@ -320,14 +323,14 @@ function DuoMesh({
         </mesh>
           <mesh
             geometry={innerGlass}
-            position={[innerShift, 0, zFront]}
+            position={[innerShift, 0, frontZ]}
             visible={open}
             userData={hitData("left", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open, DUO_INNER_WIDTH)}
           >
           <meshBasicMaterial map={leftTexture} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
         {open ? (
-          <mesh geometry={innerIsland.left} position={[bodyW / 2 + islandOverlap, innerIslandY, zFront + 0.012]}>
+          <mesh geometry={innerIsland.left} position={[bodyW / 2 + islandOverlap, innerIslandY, frontZ + 0.003]}>
             <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
           </mesh>
         ) : null}
@@ -347,7 +350,7 @@ function DuoMesh({
           </mesh>
           <mesh
             geometry={innerGlass}
-            position={[-innerShift, 0, zFront]}
+            position={[-innerShift, 0, frontZ]}
             visible={open}
             userData={hitData("right", DUO_INNER_WIDTH / 2, DUO_INNER_HEIGHT, open, DUO_INNER_WIDTH)}
           >
@@ -356,12 +359,12 @@ function DuoMesh({
           {open ? (
             <mesh
               geometry={innerIsland.right}
-              position={[-bodyW / 2 - gap - islandOverlap, innerIslandY, zFront + 0.012]}
+              position={[-bodyW / 2 - gap - islandOverlap, innerIslandY, frontZ + 0.003]}
             >
               <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
             </mesh>
           ) : null}
-          <group position={[0, 0, -zFront]} rotation={[0, Math.PI, 0]}>
+          <group position={[0, 0, backZ]} rotation={[0, Math.PI, 0]}>
             <mesh
               geometry={outerGlass}
               visible={!open}
@@ -370,7 +373,7 @@ function DuoMesh({
               <meshBasicMaterial map={texture} toneMapped={false} side={THREE.DoubleSide} />
             </mesh>
             {open ? null : (
-              <mesh geometry={outerIsland} position={[0, outerIslandY, 0.01]}>
+              <mesh geometry={outerIsland} position={[0, outerIslandY, 0.003]}>
                 <meshBasicMaterial color="#050505" />
               </mesh>
             )}
