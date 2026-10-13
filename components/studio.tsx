@@ -62,6 +62,7 @@ const EMPTY_DESIGNS: Record<DesignFamily, string | null> = {
   tablet: null,
   laptop: null,
   desktop: null,
+  watch: null,
 };
 
 function isDesignFile(file: File) {
@@ -255,6 +256,7 @@ export function Studio() {
   const socketRef = useRef<WebSocket | null>(null);
   const openedRef = useRef("");
   const pageUrlRef = useRef(DEFAULT_URL);
+  const beforeWatch = useRef<{ source: "live" | "design"; orientation: Orientation } | null>(null);
   const screenRef = useRef(screen);
   const pausedRef = useRef(false);
   const quietRef = useRef(false);
@@ -283,7 +285,7 @@ export function Studio() {
   const [shownViewport, setShownViewport] = useState(viewportKey);
   const awaitingViewport = useRef<{ width: number; height: number } | null>(null);
   const opening = screen.status === "loading" && screen.message === "Opening…";
-  if (shownViewport !== viewportKey) {
+  if (shownViewport !== viewportKey && device.kind !== "watch") {
     setShownViewport(viewportKey);
     awaitingViewport.current = { width: viewport.width, height: viewport.height };
     rememberFrame(null);
@@ -397,13 +399,14 @@ export function Studio() {
   }, [apertura, deviceId, orientation]);
 
   useEffect(() => {
+    if (device.kind === "watch") return;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
     const key = `${viewport.width}x${viewport.height}`;
     if (sentSize.current === key) return;
     sentSize.current = key;
     socket.send(JSON.stringify({ type: "resize", width: viewport.width, height: viewport.height }));
-  }, [viewport.width, viewport.height]);
+  }, [device.kind, viewport.width, viewport.height]);
 
   useEffect(() => {
     setShellMode(readShellMode());
@@ -698,6 +701,17 @@ export function Studio() {
       aperturaRef.current = 0;
       setApertura(0);
     }
+    if (next.kind === "watch") {
+      if (device.kind !== "watch") {
+        beforeWatch.current = { source: screenSource, orientation };
+      }
+      setScreenSource("design");
+      setOrientation("portrait");
+    } else if (device.kind === "watch" && beforeWatch.current) {
+      setScreenSource(beforeWatch.current.source);
+      setOrientation(beforeWatch.current.orientation);
+      beforeWatch.current = null;
+    }
     setDeviceId(value);
   }
 
@@ -904,6 +918,7 @@ export function Studio() {
                 <p className="mb-2.5 text-[13px] text-neutral-500">{flyoutLabel}</p>
                 {flyout === "page" ? (
                   <div className="flex flex-col gap-3">
+                    {device.kind === "watch" ? null : (
                     <div
                       className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5"
                       role="group"
@@ -934,24 +949,8 @@ export function Studio() {
                         </button>
                       ))}
                     </div>
-                    {screenSource === "live" ? (
-                      <form onSubmit={openPage} className="flex items-center gap-2">
-                        <Input
-                          value={url}
-                          onChange={(event) => setUrl(event.target.value)}
-                          placeholder={DEFAULT_URL}
-                          aria-label="Site URL"
-                          inputMode="url"
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
-                        />
-                        <Button type="submit" disabled={opening} className="h-9 shrink-0 px-3.5">
-                          {opening ? "Opening…" : "Open"}
-                        </Button>
-                      </form>
-                    ) : (
+                    )}
+                    {device.kind === "watch" || screenSource === "design" ? (
                       <div>
                         <div className="flex flex-col gap-1">
                           {DESIGN_ROWS.map((row) => {
@@ -1006,6 +1005,23 @@ export function Studio() {
                         </div>
                         {designError ? <p className="mt-2 text-[12px] text-neutral-500">{designError}</p> : null}
                       </div>
+                    ) : (
+                      <form onSubmit={openPage} className="flex items-center gap-2">
+                        <Input
+                          value={url}
+                          onChange={(event) => setUrl(event.target.value)}
+                          placeholder={DEFAULT_URL}
+                          aria-label="Site URL"
+                          inputMode="url"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          className="h-9 min-w-0 flex-1 border-[#ebebeb] bg-white text-sm shadow-none"
+                        />
+                        <Button type="submit" disabled={opening} className="h-9 shrink-0 px-3.5">
+                          {opening ? "Opening…" : "Open"}
+                        </Button>
+                      </form>
                     )}
                   </div>
                 ) : null}
