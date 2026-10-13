@@ -254,6 +254,11 @@ export function Studio() {
   const fileRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const openedRef = useRef("");
+  const pageUrlRef = useRef(DEFAULT_URL);
+  const screenRef = useRef(screen);
+  const pausedRef = useRef(false);
+  const quietRef = useRef(false);
+  screenRef.current = screen;
   const sentSize = useRef("");
   const [shellMode, setShellMode] = useState<ShellMode | null>(null);
   const [stageWidth, setStageWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
@@ -283,7 +288,7 @@ export function Studio() {
     awaitingViewport.current = { width: viewport.width, height: viewport.height };
     rememberFrame(null);
     setScreen((current) => {
-      if (current.status === "empty" || current.status === "error") return current;
+      if (current.status === "empty" || current.status === "error" || current.status === "paused") return current;
       if (current.message === "Opening…") return { status: "loading", message: "Opening…" };
       return { status: "loading", message: "" };
     });
@@ -517,6 +522,11 @@ export function Studio() {
 
   function sendInput(input: ScreenInput) {
     if (screenSource === "design") return;
+    const current = screenRef.current;
+    if (current.status === "paused" || current.status === "error") {
+      if (input.action === "up") openAgain();
+      return;
+    }
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
     socket.send(JSON.stringify({ type: "input", ...input }));
@@ -547,10 +557,16 @@ export function Studio() {
           return;
         }
         if (message.type === "error") {
+          quietRef.current = true;
           setScreen({ status: "error", message: message.message });
         } else if (message.type === "idle") {
-          setScreen({ status: "error", message: "The session closed after inactivity" });
-          rememberFrame(null);
+          pausedRef.current = true;
+          quietRef.current = true;
+          setScreen({
+            status: "paused",
+            message: "Session paused",
+            detail: "It closed after a while with no one using it.",
+          });
         } else if (message.type === "status" && message.state === "loading") {
           setScreen({ status: "loading", message: "Opening…" });
         }
@@ -564,7 +580,7 @@ export function Studio() {
             bitmap.close();
             return;
           }
-          if (socketRef.current !== socket) {
+          if (socketRef.current !== socket || quietRef.current) {
             bitmap.close();
             return;
           }
@@ -584,20 +600,22 @@ export function Studio() {
       if (socketRef.current !== socket) return;
       socketRef.current = null;
       openedRef.current = "";
+      if (pausedRef.current) return;
       setScreen((current) =>
-        current.status === "ready"
-          ? { status: "error", message: "The session closed" }
-          : current.status === "loading"
+        current.status === "paused"
+          ? current
+          : current.status === "ready" || current.status === "loading"
             ? { status: "error", message: "The session closed" }
             : current,
       );
     };
   }
 
-  function openPage(event: FormEvent) {
-    event.preventDefault();
-    const normalized = normalizeHttpUrl(url);
+  function presentUrl(nextUrl: string) {
+    const normalized = normalizeHttpUrl(nextUrl);
     if (!normalized) {
+      pausedRef.current = false;
+      quietRef.current = true;
       setScreen({ ...EMPTY_SCREEN });
       return;
     }
@@ -605,6 +623,8 @@ export function Studio() {
     try {
       const parsed = new URL(normalized);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        pausedRef.current = false;
+        quietRef.current = true;
         setScreen({
           status: "error",
           message: "Only http or https addresses are allowed",
@@ -612,14 +632,29 @@ export function Studio() {
         return;
       }
     } catch {
+      pausedRef.current = false;
+      quietRef.current = true;
       setScreen({ status: "error", message: "Invalid URL" });
       return;
     }
 
+    pausedRef.current = false;
+    quietRef.current = false;
+    pageUrlRef.current = normalized;
     rememberFrame(null);
     setScreenSource("live");
     setScreen({ status: "loading", message: "Opening…" });
     attachSocket(normalized, viewport.width, viewport.height);
+  }
+
+  function openAgain() {
+    if (screenRef.current.status === "loading") return;
+    presentUrl(pageUrlRef.current);
+  }
+
+  function openPage(event: FormEvent) {
+    event.preventDefault();
+    presentUrl(url);
   }
 
   function chooseMode(next: ShellMode) {

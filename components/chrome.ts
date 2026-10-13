@@ -259,25 +259,10 @@ function drawLoader(
   context.restore();
 }
 
-function drawMessage(
-  context: CanvasRenderingContext2D,
-  status: ScreenStatus,
-  message: string,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-) {
-  if (!message) return;
-  const family = getComputedStyle(document.body).fontFamily || "Inter, sans-serif";
-  context.fillStyle = status === "error" ? "#9f1239" : "#5c5c5c";
-  context.font = `500 ${22 * (width / 390)}px ${family}`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
+function wrapLines(context: CanvasRenderingContext2D, message: string, maxWidth: number) {
   const words = message.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let line = "";
-  const maxWidth = width * 0.78;
   for (const word of words) {
     const next = line ? `${line} ${word}` : word;
     if (context.measureText(next).width > maxWidth && line) {
@@ -288,11 +273,95 @@ function drawMessage(
     }
   }
   if (line) lines.push(line);
-  const lineHeight = 32 * (width / 390);
+  return lines;
+}
+
+function drawMessage(
+  context: CanvasRenderingContext2D,
+  message: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  if (!message) return;
+  const family = fontFamily();
+  const unit = width / 390;
+  context.fillStyle = "#5c5c5c";
+  context.font = `500 ${22 * unit}px ${family}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  const lines = wrapLines(context, message, width * 0.78);
+  const lineHeight = 32 * unit;
   const start = y + height / 2 - ((lines.length - 1) * lineHeight) / 2;
   lines.forEach((value, index) => {
     context.fillText(value, x + width / 2, start + index * lineHeight);
   });
+}
+
+function drawRecovery(
+  context: CanvasRenderingContext2D,
+  title: string,
+  detail: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  if (!title) return;
+  const family = fontFamily();
+  const unit = width / 390;
+  const titleSize = 22 * unit;
+  const detailSize = 15 * unit;
+  const actionSize = 15 * unit;
+  const maxWidth = width * 0.78;
+  const titleLine = titleSize * 1.35;
+  const detailLine = detailSize * 1.45;
+  const actionHeight = 34 * unit;
+  const gap = 12 * unit;
+
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = `500 ${titleSize}px ${family}`;
+  const titleLines = wrapLines(context, title, maxWidth);
+  context.font = `400 ${detailSize}px ${family}`;
+  const detailLines = detail ? wrapLines(context, detail, maxWidth) : [];
+  const block =
+    titleLines.length * titleLine +
+    (detailLines.length ? gap + detailLines.length * detailLine : 0) +
+    gap * 1.6 +
+    actionHeight;
+  let cursor = y + (height - block) / 2;
+
+  context.fillStyle = "#5c5c5c";
+  context.font = `500 ${titleSize}px ${family}`;
+  for (const line of titleLines) {
+    context.fillText(line, x + width / 2, cursor + titleLine / 2);
+    cursor += titleLine;
+  }
+  if (detailLines.length) {
+    cursor += gap;
+    context.fillStyle = "#737373";
+    context.font = `400 ${detailSize}px ${family}`;
+    for (const line of detailLines) {
+      context.fillText(line, x + width / 2, cursor + detailLine / 2);
+      cursor += detailLine;
+    }
+  }
+  cursor += gap * 1.6;
+
+  context.font = `500 ${actionSize}px ${family}`;
+  const label = "Open again";
+  const buttonWidth = Math.min(maxWidth, context.measureText(label).width + 28 * unit);
+  const buttonX = x + (width - buttonWidth) / 2;
+  context.fillStyle = "rgba(255,255,255,0.9)";
+  context.strokeStyle = "rgba(23,23,23,0.14)";
+  context.lineWidth = Math.max(1, unit);
+  roundRect(context, buttonX, cursor, buttonWidth, actionHeight, actionHeight / 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#171717";
+  context.fillText(label, x + width / 2, cursor + actionHeight / 2);
 }
 
 export function paintDesign(
@@ -329,7 +398,7 @@ export function paintDesign(
   if (!hasImage && reveal > 0) {
     context.save();
     context.globalAlpha = reveal;
-    drawMessage(context, "empty", "Upload a design for this screen", 0, 0, width, height);
+    drawMessage(context, "Upload a design for this screen", 0, 0, width, height);
     context.restore();
   }
 }
@@ -342,6 +411,7 @@ export function paintScreen(
   frameHeight: number,
   status: ScreenStatus,
   message: string,
+  detail = "",
   cssWidth = device.width,
   cssHeight = device.height,
   orientation: "portrait" | "landscape" = "portrait",
@@ -398,7 +468,25 @@ export function paintScreen(
   context.fillStyle = "#f7f7f7";
   context.fillRect(0, top, pageW, pageH);
 
-  const showLoader = reveal < 1 && status !== "error" && status !== "empty";
+  const recovery = status === "error" || status === "paused";
+  if (recovery && drewFrame && frame) {
+    context.save();
+    context.globalAlpha = 0.42;
+    try {
+      if (landscape) {
+        drawLandscape(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
+      } else {
+        drawContain(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
+      }
+    } catch {
+      drewFrame = false;
+    }
+    context.restore();
+    context.fillStyle = "rgba(247,247,247,0.46)";
+    context.fillRect(0, top, pageW, pageH);
+  }
+
+  const showLoader = reveal < 1 && !recovery && status !== "empty";
   if (showLoader) {
     if (splitMessage) {
       drawLoader(context, 0, top, pageW / 2, pageH, spin);
@@ -408,7 +496,15 @@ export function paintScreen(
     }
   }
 
-  if (drewFrame && frame && reveal > 0) {
+  const paintNotice = (noticeX: number, noticeY: number, noticeWidth: number, noticeHeight: number) => {
+    if (recovery) {
+      drawRecovery(context, message, detail, noticeX, noticeY, noticeWidth, noticeHeight);
+      return;
+    }
+    drawMessage(context, message, noticeX, noticeY, noticeWidth, noticeHeight);
+  };
+
+  if (!recovery && drewFrame && frame && reveal > 0) {
     context.save();
     context.globalAlpha = reveal;
     try {
@@ -418,17 +514,17 @@ export function paintScreen(
         drawContain(context, frame, 0, top, pageW, pageH, frameWidth, frameHeight);
       }
     } catch {
-      drawMessage(context, status, message, 0, top, messageWidth, pageH);
+      paintNotice(0, top, messageWidth, pageH);
     }
     context.restore();
   } else if (!showLoader && landscape) {
     context.save();
     context.translate(pageW / 2, top + pageH / 2);
     context.rotate(Math.PI / 2);
-    drawMessage(context, status, message, -pageH / 2, -messageWidth / 2, pageH, messageWidth);
+    paintNotice(-pageH / 2, -messageWidth / 2, pageH, messageWidth);
     context.restore();
   } else if (!showLoader) {
-    drawMessage(context, status, message, 0, top, messageWidth, pageH);
+    paintNotice(0, top, messageWidth, pageH);
   }
 
   if (isComputer(device)) {

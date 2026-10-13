@@ -413,11 +413,12 @@ export const BACKGROUNDS = [
 
 export type BackgroundId = (typeof BACKGROUNDS)[number]["id"];
 
-export type ScreenStatus = "empty" | "loading" | "error" | "ready";
+export type ScreenStatus = "empty" | "loading" | "error" | "paused" | "ready";
 
 export type ScreenState = {
   status: ScreenStatus;
   message: string;
+  detail?: string;
 };
 
 export type ViewportProfile = {

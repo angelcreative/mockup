@@ -64,6 +64,7 @@ function useDeviceTexture(
   frame: ImageBitmap | null,
   status: ScreenState["status"],
   message: string,
+  detail: string,
   time: string,
   apertura: number,
   orientation: Orientation,
@@ -122,6 +123,7 @@ function useDeviceTexture(
         frame?.height ?? 0,
         status,
         message,
+        detail,
         bounds.width,
         bounds.height,
         isComputer(device) ? "portrait" : orientation,
@@ -185,6 +187,7 @@ function useDeviceTexture(
     invalidate,
     leftCanvas,
     leftTexture,
+    detail,
     message,
     orientation,
     rightCanvas,
@@ -199,7 +202,7 @@ function useDeviceTexture(
 
   useFrame((_, delta) => {
     if (reveal.current >= 1 && fadeStart.current === null) return;
-    if (!designHoldRef.current && (status === "error" || status === "empty")) return;
+    if (!designHoldRef.current && (status === "error" || status === "paused" || status === "empty")) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!reduce) spin.current = (spin.current + delta * 3.4) % (Math.PI * 2);
     if (fadeStart.current !== null) {
@@ -1318,6 +1321,7 @@ function Stage({
     frame,
     screen.status,
     screen.message,
+    screen.detail ?? "",
     time,
     apertura,
     orientation,
