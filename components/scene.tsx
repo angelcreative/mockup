@@ -6,9 +6,10 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
-import { BACKGROUNDS, duoScreen, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
+import { BACKGROUNDS, duoScreen, glassSize, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceScreenSize, deviceSpan } from "@/components/devices";
 import { paintDesign, paintScreen } from "@/components/chrome";
+import type { FrameStore } from "@/lib/frame-store";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 
 export type ScreenInput =
@@ -73,7 +74,7 @@ function copyPanel(source: HTMLCanvasElement, target: HTMLCanvasElement, mode: "
 
 function useDeviceTexture(
   device: DeviceSpec,
-  frame: ImageBitmap | null,
+  frames: FrameStore,
   status: ScreenState["status"],
   message: string,
   detail: string,
@@ -96,6 +97,8 @@ function useDeviceTexture(
   const spin = useRef(0);
   const fadeStart = useRef<number | null>(null);
   const paintRef = useRef<(revealValue: number, spinValue: number) => void>(() => undefined);
+  const syncRef = useRef<() => void>(() => undefined);
+  const frameRef = useRef(frames.get());
   const designRef = useRef(designImage);
   const designHoldRef = useRef(designHold);
   const designPendingRef = useRef(designPending);
@@ -126,6 +129,7 @@ function useDeviceTexture(
         spinValue,
       );
     } else {
+      const frame = frameRef.current;
       if (frame && (frame.width < 1 || frame.height < 1)) return;
       paintScreen(
         canvas,
@@ -155,8 +159,9 @@ function useDeviceTexture(
   };
   paintRef.current = paint;
 
-  useLayoutEffect(() => {
+  const sync = () => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const frame = frameRef.current;
     const showing = Boolean(frame && frame.width >= 1 && frame.height >= 1);
     if (!sourceKeyRef.current) {
       sourceKeyRef.current = sourceKey;
@@ -188,6 +193,26 @@ function useDeviceTexture(
     }
     paint(reveal.current, spin.current);
     invalidate();
+  };
+
+  useLayoutEffect(() => {
+    syncRef.current = sync;
+  });
+
+  useEffect(
+    () =>
+      frames.subscribe(() => {
+        frameRef.current = frames.get();
+        syncRef.current();
+      }),
+    [frames],
+  );
+
+  useLayoutEffect(() => {
+    frameRef.current = frames.get();
+    sync();
+    // sync reads every value listed here; frames arrive through the subscription above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bounds.height,
     bounds.split,
@@ -195,7 +220,6 @@ function useDeviceTexture(
     canvas,
     time,
     device,
-    frame,
     invalidate,
     leftCanvas,
     leftTexture,
@@ -1471,6 +1495,81 @@ function ViewRig({
   return null;
 }
 
+/**
+ * How many device pixels the glass covers on this screen, per CSS pixel of the page. The
+ * server encodes frames at that size instead of the page's full resolution.
+ */
+function ScaleProbe({
+  device,
+  apertura,
+  orientation,
+  onScale,
+}: {
+  device: DeviceSpec;
+  apertura: number;
+  orientation: Orientation;
+  onScale: (scale: number) => void;
+}) {
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  const height = useThree((state) => state.size.height);
+  const last = useRef(0);
+  const onScaleRef = useRef(onScale);
+
+  useEffect(() => {
+    onScaleRef.current = onScale;
+  });
+
+  useFrame(() => {
+    const world = deviceScreenSize(device, orientation, apertura);
+    const css = glassSize(device, apertura);
+    const distance = camera.position.length();
+    if (distance <= 0 || height <= 0) return;
+    const visible = 2 * distance * Math.tan((camera.fov * Math.PI) / 360);
+    const pixels = height * Math.min(window.devicePixelRatio || 1, 2);
+    const covered = (Math.max(world.width, world.height) / visible) * pixels;
+    // A little headroom, rounded up to quarter steps so small camera moves change nothing.
+    const scale = Math.min(3, Math.max(0.5, Math.ceil(((covered / Math.max(css.width, css.height)) * 1.1) * 4) / 4));
+    if (scale === last.current) return;
+    last.current = scale;
+    onScaleRef.current(scale);
+  });
+
+  return null;
+}
+
+/** Drops to 1× pixel ratio while someone drags the scene and restores it when they stop. */
+function AdaptiveDpr() {
+  const gl = useThree((state) => state.gl);
+  const current = useThree((state) => state.performance.current);
+  const regress = useThree((state) => state.performance.regress);
+  const initialDpr = useThree((state) => state.viewport.initialDpr);
+  const setDpr = useThree((state) => state.setDpr);
+  const controls = useThree((state) => state.controls) as { enabled?: boolean } | null;
+
+  useEffect(() => {
+    setDpr(current < 1 ? Math.min(initialDpr, Math.max(1, initialDpr * current)) : initialDpr);
+  }, [current, initialDpr, setDpr]);
+
+  useEffect(() => {
+    // Only a person's drag or wheel, so cinematics and auto-rotate keep full resolution.
+    const dom = gl.domElement;
+    const move = (event: PointerEvent) => {
+      if (event.buttons > 0 && controls?.enabled !== false) regress();
+    };
+    const wheel = () => {
+      if (controls?.enabled !== false) regress();
+    };
+    dom.addEventListener("pointermove", move);
+    dom.addEventListener("wheel", wheel, { passive: true });
+    return () => {
+      dom.removeEventListener("pointermove", move);
+      dom.removeEventListener("wheel", wheel);
+    };
+  }, [controls, gl, regress]);
+
+  return null;
+}
+
 const ORBIT_MOUSE = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
 const MOVE_MOUSE = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 const ORBIT_TOUCH = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
@@ -1479,7 +1578,7 @@ const MOVE_TOUCH = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
 function Stage({
   device,
   screen,
-  frame,
+  frames,
   apertura,
   orientation,
   light,
@@ -1499,10 +1598,11 @@ function Stage({
   designPending,
   tool,
   viewRef,
+  onScale,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
-  frame: ImageBitmap | null;
+  frames: FrameStore;
   apertura: number;
   orientation: Orientation;
   light: number;
@@ -1522,10 +1622,11 @@ function Stage({
   designPending: boolean;
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
+  onScale: (scale: number) => void;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
-    frame,
+    frames,
     screen.status,
     screen.message,
     screen.detail ?? "",
@@ -1589,6 +1690,8 @@ function Stage({
         maxAzimuthAngle={Infinity}
       />
       <ViewRig span={span} viewRef={viewRef} />
+      <ScaleProbe device={device} apertura={apertura} orientation={orientation} onScale={onScale} />
+      <AdaptiveDpr />
       <Turntable enabled={autoRotate && !cinematic} />
       <Cinematic
         shot={cinematic}
@@ -1611,7 +1714,7 @@ function Stage({
 export default function Scene({
   device,
   screen,
-  frame,
+  frames,
   apertura,
   orientation,
   light,
@@ -1631,10 +1734,11 @@ export default function Scene({
   designPending,
   tool,
   viewRef,
+  onScale,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
-  frame: ImageBitmap | null;
+  frames: FrameStore;
   apertura: number;
   orientation: Orientation;
   light: number;
@@ -1654,14 +1758,15 @@ export default function Scene({
   designPending: boolean;
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
+  onScale: (scale: number) => void;
 }) {
   return (
     <Canvas
       dpr={[1, 2]}
       frameloop="demand"
+      performance={{ min: 0.5, debounce: 250 }}
       camera={{ position: [7.6, 2.6, 10.4], fov: 28 }}
       gl={{
-        preserveDrawingBuffer: true,
         antialias: true,
         alpha: true,
         powerPreference: "high-performance",
@@ -1676,7 +1781,7 @@ export default function Scene({
         <Stage
           device={device}
           screen={screen}
-          frame={frame}
+          frames={frames}
           apertura={apertura}
           orientation={orientation}
           light={light}
@@ -1696,6 +1801,7 @@ export default function Scene({
           designPending={designPending}
           tool={tool}
           viewRef={viewRef}
+          onScale={onScale}
         />
       </Suspense>
     </Canvas>

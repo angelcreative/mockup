@@ -45,6 +45,7 @@ import {
   type Orientation,
   type ScreenState,
 } from "@/lib/devices";
+import { createFrameStore } from "@/lib/frame-store";
 import type { LiveServerMessage } from "@/lib/live-protocol";
 import { normalizeHttpUrl } from "@/lib/url";
 
@@ -71,11 +72,10 @@ function isDesignFile(file: File) {
   return /\.(png|jpe?g|webp)$/i.test(file.name);
 }
 
+/** The server scales frames to what the screen can show, so only the shape is fixed. */
 function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) {
-  const scales = width * height > 600_000 ? [1] : [1, 2];
-  return scales.some(
-    (scale) => Math.abs(bitmap.width - width * scale) <= 4 && Math.abs(bitmap.height - height * scale) <= 4,
-  );
+  if (bitmap.width > width * 2 + 4 || bitmap.height > height * 2 + 4) return false;
+  return Math.abs(bitmap.width / bitmap.height - width / height) < 0.02;
 }
 
 const DEFAULT_URL = "https://www.apple.com";
@@ -255,7 +255,9 @@ export function Studio() {
     status: "loading",
     message: "Opening…",
   });
-  const [frame, setFrame] = useState<ImageBitmap | null>(null);
+  const frames = useState(createFrameStore)[0];
+  const scaleRef = useRef(0);
+  const scaleTimer = useRef(0);
   const exportRef = useRef<((mode: ShotMode) => void) | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -327,13 +329,19 @@ export function Studio() {
   }
 
   function rememberFrame(next: ImageBitmap | null) {
-    setFrame((current) => {
-      if (current && current !== next) {
-        const stale = current;
-        requestAnimationFrame(() => requestAnimationFrame(() => stale.close()));
+    frames.set(next);
+  }
+
+  function sendScale(value: number) {
+    scaleRef.current = value;
+    window.clearTimeout(scaleTimer.current);
+    // Zooming passes through many sizes; tell the server once it settles.
+    scaleTimer.current = window.setTimeout(() => {
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "scale", value }));
       }
-      return next;
-    });
+    }, 400);
   }
 
   function closeSocket() {
@@ -551,6 +559,7 @@ export function Studio() {
       if (socketRef.current !== socket) return;
       openedRef.current = target;
       sentSize.current = key;
+      if (scaleRef.current > 0) socket.send(JSON.stringify({ type: "scale", value: scaleRef.current }));
       socket.send(JSON.stringify({ type: "open", url: target, width, height }));
       if (document.hidden) socket.send(JSON.stringify({ type: "pause" }));
     };
@@ -580,28 +589,44 @@ export function Studio() {
         }
         return;
       }
-      if (document.hidden) return;
+      // The server sends the next frame only after this one is confirmed, so confirm
+      // every frame, drawn or dropped, once the browser is ready for another.
+      const confirm = () => {
+        if (socketRef.current === socket && socket.readyState === WebSocket.OPEN) {
+          socket.send('{"type":"frame"}');
+        }
+      };
+      if (document.hidden) {
+        confirm();
+        return;
+      }
       const bytes = event.data as ArrayBuffer;
       createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
         .then((bitmap) => {
           if (bitmap.width < 1 || bitmap.height < 1) {
             bitmap.close();
+            confirm();
             return;
           }
           if (socketRef.current !== socket || quietRef.current) {
             bitmap.close();
+            confirm();
             return;
           }
           const expected = awaitingViewport.current;
           if (expected && !bitmapFitsViewport(bitmap, expected.width, expected.height)) {
             bitmap.close();
+            confirm();
             return;
           }
           awaitingViewport.current = null;
           rememberFrame(bitmap);
-          setScreen({ status: "ready", message: "" });
+          requestAnimationFrame(confirm);
+          setScreen((current) =>
+            current.status === "ready" && current.message === "" ? current : { status: "ready", message: "" },
+          );
         })
-        .catch(() => undefined);
+        .catch(confirm);
     };
 
     socket.onclose = () => {
@@ -744,7 +769,8 @@ export function Studio() {
         <Scene
           device={device}
           screen={screen}
-          frame={frame}
+          frames={frames}
+          onScale={sendScale}
           apertura={apertura}
           orientation={orientation}
           light={light}

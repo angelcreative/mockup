@@ -2,6 +2,8 @@ export type LiveClientMessage =
   | { type: "open"; url: string; width: number; height: number }
   | { type: "resize"; width: number; height: number }
   | { type: "ping" }
+  | { type: "frame" }
+  | { type: "scale"; value: number }
   | { type: "pause" }
   | { type: "resume" }
   | {
@@ -30,6 +32,12 @@ export function parseClientMessage(raw: string): LiveClientMessage | null {
   if (!value || typeof value !== "object") return null;
   const message = value as { type?: unknown };
   if (message.type === "ping") return { type: "ping" };
+  if (message.type === "frame") return { type: "frame" };
+  if (message.type === "scale") {
+    const body = value as { value?: unknown };
+    if (typeof body.value !== "number" || !Number.isFinite(body.value)) return null;
+    return { type: "scale", value: body.value };
+  }
   if (message.type === "pause") return { type: "pause" };
   if (message.type === "resume") return { type: "resume" };
   if (message.type === "open" || message.type === "resize") {

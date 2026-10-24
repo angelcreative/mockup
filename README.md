@@ -41,7 +41,14 @@ Mac sizes, as of 10 Oct 2026, are the default Retina logical resolutions: MacBoo
 
 The client sends `open` with the URL and the content size, `resize` when the device, opening, or orientation changes, and `input` with CSS coordinates. The server replies with status messages and JPEG frames from `Page.startScreencast`.
 
-Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes. One Chromium serves the whole process. Closing the socket closes the page; after three idle minutes the browser is stopped.
+Frames are paced so the server never runs ahead of the screen:
+
+- The client answers each frame with `frame` once it has drawn it, and Chromium is acknowledged only then, so one frame is on the wire and one waits. Frames come at up to ~30 fps while someone is using the page and ~6 fps while it only animates by itself.
+- The client sends `scale`, the device pixels the glass covers per CSS pixel. Frames are encoded at that size, up to the page's own pixel ratio, so a small device on screen costs less and zooming in sharpens it.
+- Pointer moves and wheel steps that queue up while Chromium is busy merge into one.
+- Ads and analytics requests are blocked.
+
+Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes. One Chromium page serves the whole process: while someone has it, a second visitor is told the live view is busy instead of taking it over. The page closes when the socket closes, after three minutes without input (keep-alives don't count), or one minute after the tab is hidden; three minutes later the browser stops.
 
 ## Render
 
