@@ -30,6 +30,8 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 7. On iPhone Duo, **Opening** 0 is the closed phone (outer display) and 1 opens it fully (inner display across both leaves). The same page stays on the glass. Closed, the browser uses 466×585. Open, one viewport of 890×533 is split across the two panels.
 8. On a MacBook, **Lid** 0 is closed and 1 is a normal working angle. The page stays on the display while the lid is open. The menu bar uses the **Time** field, the same clock as the iPhone, iPad, and Duo status bar. Default time is 9:41.
 9. **Save image** downloads the current PNG, a transparent background, a square frame, or a 9:16 story frame.
+10. **Copy image** in Export, or `⌘C` / `Ctrl+C` anywhere outside a text field, puts the PNG on the clipboard. **Copy link** copies the address bar, which always holds the current page, device, finish, background, orientation, and opening, so a shared link restores the same mockup.
+11. Paste or drop an image anywhere to place it on the screen, or a link to open it. The **Add page url** field and the upload buttons still work as before.
 
 The status bar, menu bar, Dynamic Island, notch, and home indicator are device chrome. The page lives in the safe area and does not sit under that chrome.
 

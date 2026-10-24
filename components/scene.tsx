@@ -18,6 +18,9 @@ export type ScreenInput =
 
 export type ShotMode = "png" | "transparent" | "square" | "story";
 
+/** Renders the scene for a shot and downloads it or copies it. Resolves false if copying failed. */
+export type TakeShot = (mode: ShotMode, target?: "download" | "clipboard") => Promise<boolean>;
+
 export type CinematicId = "pull-back" | "push-in" | "orbit" | "reveal" | "settle";
 
 export type CinematicShot = { id: CinematicId; token: number };
@@ -675,6 +678,29 @@ function SceneBackground({
   );
 }
 
+/** A 2D copy of the WebGL canvas, made right after rendering, before the buffer is cleared. */
+function copyCanvas(source: HTMLCanvasElement) {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  canvas.getContext("2d")?.drawImage(source, 0, 0);
+  return canvas;
+}
+
+async function copyPng(canvas: HTMLCanvasElement) {
+  if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) return false;
+  const blob = new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("png"))), "image/png");
+  });
+  try {
+    // Safari only allows the write inside the click, so it takes the pending blob.
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function downloadPng(href: string, name: string) {
   const link = document.createElement("a");
   link.href = href;
@@ -694,7 +720,7 @@ function frameShot(source: HTMLCanvasElement, aspect: number) {
   canvas.width = Math.max(1, tw);
   canvas.height = Math.max(1, th);
   const context = canvas.getContext("2d");
-  if (!context) return source.toDataURL("image/png");
+  if (!context) return copyCanvas(source);
   const probe = document.createElement("canvas");
   probe.width = 1;
   probe.height = 1;
@@ -711,7 +737,7 @@ function frameShot(source: HTMLCanvasElement, aspect: number) {
   const dw = sw * scale;
   const dh = sh * scale;
   context.drawImage(source, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
-  return canvas.toDataURL("image/png");
+  return canvas;
 }
 
 function SoftShadow({ y, strength, width }: { y: number; strength: number; width: number }) {
@@ -752,12 +778,12 @@ function SoftShadow({ y, strength, width }: { y: number; strength: number; width
 function ExportBridge({
   exportRef,
 }: {
-  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
+  exportRef: MutableRefObject<TakeShot | null>;
 }) {
   const { gl, scene, camera } = useThree();
 
   useEffect(() => {
-    exportRef.current = (mode: ShotMode) => {
+    exportRef.current = (mode, target = "download") => {
       const previous = scene.background;
       const clear = new THREE.Color();
       gl.getClearColor(clear);
@@ -771,17 +797,17 @@ function ExportBridge({
       }
       gl.render(scene, camera);
       const source = gl.domElement;
-      if (mode === "square" || mode === "story") {
-        downloadPng(frameShot(source, mode === "square" ? 1 : 9 / 16), mode === "square" ? "mockup-square.png" : "mockup-story.png");
-      } else {
-        downloadPng(source.toDataURL("image/png"), mode === "transparent" ? "mockup-transparent.png" : "mockup.png");
-      }
+      const shot =
+        mode === "square" || mode === "story" ? frameShot(source, mode === "square" ? 1 : 9 / 16) : copyCanvas(source);
       if (mode === "transparent") {
         scene.background = previous;
         if (backdrop) backdrop.visible = backdropVisible;
         gl.setClearColor(clear, clearAlpha);
         gl.render(scene, camera);
       }
+      if (target === "clipboard") return copyPng(shot);
+      downloadPng(shot.toDataURL("image/png"), mode === "png" ? "mockup.png" : `mockup-${mode}.png`);
+      return Promise.resolve(true);
     };
     return () => {
       exportRef.current = null;
@@ -1614,7 +1640,7 @@ function Stage({
   logoLight: boolean;
   cinematic: CinematicShot | null;
   onCinematicEnd: () => void;
-  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
+  exportRef: MutableRefObject<TakeShot | null>;
   onInput: (input: ScreenInput) => void;
   insetLeft: number;
   designImage: HTMLImageElement | null;
@@ -1750,7 +1776,7 @@ export default function Scene({
   logoLight: boolean;
   cinematic: CinematicShot | null;
   onCinematicEnd: () => void;
-  exportRef: MutableRefObject<((mode: ShotMode) => void) | null>;
+  exportRef: MutableRefObject<TakeShot | null>;
   onInput: (input: ScreenInput) => void;
   insetLeft: number;
   designImage: HTMLImageElement | null;
