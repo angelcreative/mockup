@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   Smartphone,
   SunMedium,
+  Upload,
   type LucideIcon,
 } from "lucide-react";
 
@@ -1272,6 +1273,13 @@ export function Studio() {
                         </Button>
                       </form>
                     )}
+                    <p className="flex items-start gap-1.5 text-[12px] leading-snug text-neutral-500">
+                      <Upload className="mt-px size-3.5 shrink-0" aria-hidden />
+                      <span>
+                        Or drag and drop {device.kind === "watch" ? "an image" : "a link or an image"} anywhere on the page.
+                        Pasting works too.
+                      </span>
+                    </p>
                   </div>
                 ) : null}
                 {flyout === "device" ? (
