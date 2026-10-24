@@ -809,7 +809,7 @@ function readHit(object: THREE.Object3D) {
     topInset?: number;
     bottomInset?: number;
     glassWidth?: number;
-    cutout?: "notch" | "island" | "none";
+    cutout?: "notch" | "island" | "hole" | "none";
     landscapeStatus?: number;
   };
   if (!data.screen || !data.panel) return null;

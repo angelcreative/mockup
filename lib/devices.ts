@@ -21,7 +21,7 @@ export type DeviceId =
   | "watch-46"
   | "watch-ultra-49";
 
-export type Cutout = "notch" | "island" | "none";
+export type Cutout = "notch" | "island" | "hole" | "none";
 
 export type DeviceKind = "phone" | "tablet" | "duo" | "laptop" | "desktop" | "watch";
 
@@ -85,6 +85,14 @@ export const DUO_BODY = {
 } as const;
 
 export const ISLAND_POINTS = { width: 126, height: 37, top: 11 };
+/** Duo's cover display has a punch-hole camera in the top corner away from the hinge. The inner display has none. */
+export const DUO_HOLE_POINTS = { size: 26, top: 17, left: 20 };
+
+/** The camera hole in CSS points, or null when the glass is the inner display. */
+export function duoHole(device: DeviceSpec, glassWidth: number) {
+  if (device.cutout !== "hole" || glassWidth > DUO_OUTER_WIDTH) return null;
+  return DUO_HOLE_POINTS;
+}
 export const NOTCH_POINTS = { width: 162, height: 33 };
 
 const aluminum = { metalness: 0.5, roughness: 0.38 };
@@ -189,7 +197,7 @@ export const DEVICES: readonly DeviceSpec[] = [
     label: "iPhone Duo",
     width: DUO_OUTER_WIDTH,
     height: DUO_OUTER_HEIGHT,
-    cutout: "island",
+    cutout: "hole",
     finishes: [
       { id: "cielo-nocturno", label: "Night sky", color: "#1a2433", metalness: 0.72, roughness: 0.34 },
       { id: "blanco-estelar", label: "Star white", color: "#f3efe4", metalness: 0.46, roughness: 0.4 },
