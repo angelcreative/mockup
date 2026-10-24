@@ -21,9 +21,17 @@ export type ShotMode = "png" | "transparent" | "square" | "story";
 /** Renders the scene for a shot and downloads it or copies it. Resolves false if copying failed. */
 export type TakeShot = (mode: ShotMode, target?: "download" | "clipboard") => Promise<boolean>;
 
-export type CinematicId = "pull-back" | "push-in" | "orbit" | "reveal" | "settle";
+export type CinematicId = "pull-back" | "push-in" | "orbit" | "reveal" | "settle" | "loop";
 
-export type CinematicShot = { id: CinematicId; token: number };
+/**
+ * `record` plays the shot even with reduced motion, since the person asked for a video of it.
+ * `aspect` frames the shot for a video crop instead of the window.
+ */
+export type CinematicShot = { id: CinematicId; token: number; record?: boolean; aspect?: number };
+
+export type RecordFormat = "current" | "square" | "story";
+
+export type Recorder = { stop: () => Promise<Blob | null>; cancel: () => void };
 
 export type ViewTool = "orbit" | "move";
 
@@ -678,6 +686,151 @@ function SceneBackground({
   );
 }
 
+const VIDEO_TYPES = [
+  "video/mp4;codecs=avc1.640028",
+  "video/mp4;codecs=avc1",
+  "video/mp4",
+  "video/webm;codecs=vp9",
+  "video/webm;codecs=vp8",
+  "video/webm",
+];
+
+export function videoType() {
+  if (typeof MediaRecorder === "undefined") return null;
+  return VIDEO_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? null;
+}
+
+export function formatAspect(format: RecordFormat) {
+  return format === "square" ? 1 : format === "story" ? 9 / 16 : null;
+}
+
+/**
+ * The centre of the canvas cut to the format's shape (the shot is framed for that shape), and
+ * the video size: the cut itself, never upscaled, at most 1920 on the long side.
+ */
+function videoCrop(width: number, height: number, format: RecordFormat) {
+  const aspect = formatAspect(format) ?? width / height;
+  const cropW = width / height > aspect ? height * aspect : width;
+  const cropH = width / height > aspect ? height : width / aspect;
+  const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
+  const scale = Math.min(1, 1920 / Math.max(cropW, cropH));
+  return {
+    sx: (width - cropW) / 2,
+    sy: (height - cropH) / 2,
+    sw: cropW,
+    sh: cropH,
+    width: even(cropW * scale),
+    height: even(cropH * scale),
+  };
+}
+
+/**
+ * Records the scene while mounted. It takes over rendering (priority 1) so every frame is
+ * drawn into a 2D canvas right after WebGL renders it, cut to the chosen format, and that
+ * canvas is what MediaRecorder encodes. The pixel ratio goes to 2× for the take.
+ */
+function SceneRecorder({
+  format,
+  recorderRef,
+}: {
+  format: RecordFormat;
+  recorderRef: MutableRefObject<Recorder | null>;
+}) {
+  const { gl, scene, camera, invalidate } = useThree();
+  const setDpr = useThree((state) => state.setDpr);
+  const initialDpr = useThree((state) => state.viewport.initialDpr);
+  const output = useRef<{
+    canvas: HTMLCanvasElement;
+    context: CanvasRenderingContext2D;
+    start: () => void;
+    frames: number;
+    waited: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setDpr(Math.max(2, initialDpr));
+    return () => setDpr(initialDpr);
+  }, [initialDpr, setDpr]);
+
+  useEffect(() => {
+    const type = videoType();
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!type || !context || typeof canvas.captureStream !== "function") {
+      recorderRef.current = { stop: () => Promise.resolve(null), cancel: () => undefined };
+      return;
+    }
+    const stream = canvas.captureStream(60);
+    const recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 12_000_000 });
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    // Sized and started on a later frame, once the 2× pixel ratio has reached the canvas;
+    // an encoder keeps the size it starts with.
+    output.current = { canvas, context, start: () => recorder.start(250), frames: 0, waited: 0 };
+    invalidate();
+    let settled = false;
+    const finish = () => {
+      settled = true;
+      stream.getTracks().forEach((track) => track.stop());
+    };
+    recorderRef.current = {
+      stop: () =>
+        new Promise((resolve) => {
+          if (settled || recorder.state === "inactive") {
+            resolve(null);
+            return;
+          }
+          recorder.onstop = () => {
+            finish();
+            resolve(chunks.length ? new Blob(chunks, { type: type.split(";")[0] }) : null);
+          };
+          recorder.stop();
+        }),
+      cancel: () => {
+        if (settled) return;
+        recorder.onstop = finish;
+        if (recorder.state !== "inactive") recorder.stop();
+        else finish();
+      },
+    };
+    return () => {
+      recorderRef.current?.cancel();
+      recorderRef.current = null;
+      output.current = null;
+    };
+  }, [format, gl, invalidate, recorderRef]);
+
+  useFrame(() => {
+    gl.render(scene, camera);
+    const out = output.current;
+    if (!out) return;
+    const source = gl.domElement;
+    const { canvas, context } = out;
+    const crop = videoCrop(source.width, source.height, format);
+    if (out.frames === 0) {
+      // Wait for the 2× pixel ratio to reach the canvas, but not forever.
+      out.frames = gl.getPixelRatio() >= Math.max(2, initialDpr) - 0.01 || out.waited > 30 ? 1 : 0;
+      out.waited += 1;
+      if (out.frames === 0) {
+        invalidate();
+        return;
+      }
+      canvas.width = crop.width;
+      canvas.height = crop.height;
+    } else {
+      out.frames += 1;
+    }
+    context.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
+    if (out.frames === 1) out.start();
+    // Keep frames coming for the encoder even when nothing in the scene moves.
+    invalidate();
+  }, 1);
+
+  return null;
+}
+
 /** A 2D copy of the WebGL canvas, made right after rendering, before the buffer is cleared. */
 function copyCanvas(source: HTMLCanvasElement) {
   const canvas = document.createElement("canvas");
@@ -1137,6 +1290,11 @@ function ScreenPointer({
 }
 
 const SHOT_SECONDS = 5;
+const LOOP_SECONDS = 8;
+
+export function shotSeconds(id: CinematicId) {
+  return id === "loop" ? LOOP_SECONDS : SHOT_SECONDS;
+}
 const RADIUS_MIN = 7.15;
 const RADIUS_MAX = 25.6;
 
@@ -1170,6 +1328,13 @@ function shotPoses(id: CinematicId, close: number, wide: number): { from: Camera
   const hero: CameraPose = { theta: 0.66, phi: 1.3, radius: wide };
   if (id === "pull-back") return { from: front, to: hero };
   if (id === "push-in") return { from: hero, to: front };
+  if (id === "loop") {
+    // A full turn at constant speed ends exactly where it began, so the video repeats seamlessly.
+    return {
+      from: { theta: 0.62, phi: 1.36, radius: clampRadius(wide * 0.92) },
+      to: { theta: 0.62 + Math.PI * 2, phi: 1.36, radius: clampRadius(wide * 0.92) },
+    };
+  }
   if (id === "orbit") {
     return {
       from: { theta: 0.04, phi: 1.28, radius: wide },
@@ -1226,7 +1391,9 @@ function Cinematic({
   const gl = useThree((state) => state.gl);
   const size = useThree((state) => state.size);
   const invalidate = useThree((state) => state.invalidate);
-  const run = useRef<{ from: CameraPose; to: CameraPose; elapsed: number } | null>(null);
+  const run = useRef<{ from: CameraPose; to: CameraPose; elapsed: number; seconds: number; linear: boolean } | null>(
+    null,
+  );
   const controlsRef = useRef(controls);
   const onEndRef = useRef(onEnd);
   const framingRef = useRef({ device, orientation, apertura, width: size.width, height: size.height });
@@ -1242,12 +1409,12 @@ function Cinematic({
     }
     const framing = framingRef.current;
     const screen = deviceScreenSize(framing.device, framing.orientation, framing.apertura);
-    const aspect = framing.height > 0 ? framing.width / framing.height : 1.4;
+    const aspect = shot.aspect ?? (framing.height > 0 ? framing.width / framing.height : 1.4);
     const close = clampRadius(fitDistance(screen.width, screen.height, camera.fov, aspect, 1.05));
     const wide = clampRadius(Math.max(close + 3.4, close * 1.7, Math.max(screen.width, screen.height) * 2.7));
     const poses = shotPoses(shot.id, close, wide);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
+    if (reduced && !shot.record) {
       placeCamera(camera, controlsRef.current, poses.to);
       run.current = null;
       if (controlsRef.current) controlsRef.current.enableDamping = true;
@@ -1255,7 +1422,13 @@ function Cinematic({
       onEndRef.current();
       return;
     }
-    run.current = { from: poses.from, to: poses.to, elapsed: 0 };
+    run.current = {
+      from: poses.from,
+      to: poses.to,
+      elapsed: 0,
+      seconds: shotSeconds(shot.id),
+      linear: shot.id === "loop",
+    };
     placeCamera(camera, controlsRef.current, poses.from);
     invalidate();
   }, [camera, invalidate, shot]);
@@ -1285,8 +1458,9 @@ function Cinematic({
     orbit.enableDamping = false;
     orbit.autoRotate = false;
     current.elapsed += Math.min(delta, 0.05);
-    const done = current.elapsed >= SHOT_SECONDS;
-    const amount = done ? 1 : easeInOut(current.elapsed / SHOT_SECONDS);
+    const done = current.elapsed >= current.seconds;
+    const progress = current.elapsed / current.seconds;
+    const amount = done ? 1 : current.linear ? progress : easeInOut(progress);
     placeCamera(camera, orbit, lerpPose(current.from, current.to, amount));
     invalidate();
     if (!done) return;
@@ -1625,6 +1799,8 @@ function Stage({
   tool,
   viewRef,
   onScale,
+  recordFormat,
+  recorderRef,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1649,6 +1825,8 @@ function Stage({
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
   onScale: (scale: number) => void;
+  recordFormat: RecordFormat | null;
+  recorderRef: MutableRefObject<Recorder | null>;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
@@ -1718,6 +1896,7 @@ function Stage({
       <ViewRig span={span} viewRef={viewRef} />
       <ScaleProbe device={device} apertura={apertura} orientation={orientation} onScale={onScale} />
       <AdaptiveDpr />
+      {recordFormat ? <SceneRecorder format={recordFormat} recorderRef={recorderRef} /> : null}
       <Turntable enabled={autoRotate && !cinematic} />
       <Cinematic
         shot={cinematic}
@@ -1761,6 +1940,8 @@ export default function Scene({
   tool,
   viewRef,
   onScale,
+  recordFormat,
+  recorderRef,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1785,6 +1966,8 @@ export default function Scene({
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
   onScale: (scale: number) => void;
+  recordFormat: RecordFormat | null;
+  recorderRef: MutableRefObject<Recorder | null>;
 }) {
   return (
     <Canvas
@@ -1828,6 +2011,8 @@ export default function Scene({
           tool={tool}
           viewRef={viewRef}
           onScale={onScale}
+          recordFormat={recordFormat}
+          recorderRef={recorderRef}
         />
       </Suspense>
     </Canvas>
