@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import {
   ChevronDown,
@@ -28,7 +28,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { CinematicId, CinematicShot, ScreenInput, ShotMode } from "@/components/scene";
+import type { CinematicId, CinematicShot, ScreenInput, ShotMode, ViewApi, ViewTool } from "@/components/scene";
+import { ViewDock } from "@/components/view-dock";
 import {
   BACKGROUNDS,
   DESIGN_ROWS,
@@ -238,6 +239,10 @@ export function Studio() {
   const [logoLight, setLogoLight] = useState(false);
   const [cinematic, setCinematic] = useState<CinematicShot | null>(null);
   const cinematicToken = useRef(0);
+  const [viewTool, setViewTool] = useState<ViewTool>("orbit");
+  const [holdingMove, setHoldingMove] = useState(false);
+  const viewRef = useRef<ViewApi | null>(null);
+  const stopCinematic = useCallback(() => setCinematic(null), []);
   const [apertura, setApertura] = useState(0);
   const [hingeOpen, setHingeOpen] = useState(false);
   const aperturaRef = useRef(0);
@@ -733,7 +738,9 @@ export function Studio() {
 
   return (
     <div className="relative h-dvh overflow-hidden bg-white text-neutral-950">
-      <div className="absolute inset-0 touch-none">
+      <div
+        className={`absolute inset-0 touch-none ${holdingMove || viewTool === "move" ? "cursor-grab active:cursor-grabbing" : ""}`}
+      >
         <Scene
           device={device}
           screen={screen}
@@ -757,8 +764,22 @@ export function Studio() {
           designPending={
             screenSource === "design" && Boolean(designUrl) && !designReady && designFailed !== designUrl
           }
+          tool={holdingMove ? "move" : viewTool}
+          viewRef={viewRef}
         />
       </div>
+
+      {shellMode ? (
+        <ViewDock
+          tool={viewTool}
+          holding={holdingMove}
+          hidden={shellMode === "icon"}
+          viewRef={viewRef}
+          onTool={setViewTool}
+          onHold={setHoldingMove}
+          onUse={stopCinematic}
+        />
+      ) : null}
 
       <div
         ref={markRef}
