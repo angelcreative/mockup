@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import {
   ChevronDown,
   Clapperboard,
+  Copy,
   Download,
   EyeOff,
   Image as ImageIcon,
@@ -28,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { CinematicId, CinematicShot, ScreenInput, ShotMode, ViewApi, ViewTool } from "@/components/scene";
+import type { CinematicId, CinematicShot, ScreenInput, ShotMode, TakeShot, ViewApi, ViewTool } from "@/components/scene";
 import { ViewDock } from "@/components/view-dock";
 import {
   BACKGROUNDS,
@@ -46,6 +47,7 @@ import {
   type ScreenState,
 } from "@/lib/devices";
 import { createFrameStore } from "@/lib/frame-store";
+import { defaultOpen, hasHinge, isHttpUrl, LINK_DEFAULTS, readLink, writeLink } from "@/lib/link";
 import type { LiveServerMessage } from "@/lib/live-protocol";
 import { normalizeHttpUrl } from "@/lib/url";
 
@@ -78,7 +80,17 @@ function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) 
   return Math.abs(bitmap.width / bitmap.height - width / height) < 0.02;
 }
 
-const DEFAULT_URL = "https://www.apple.com";
+const DEFAULT_URL = LINK_DEFAULTS.url;
+
+const TYPING = "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='listbox'], [role='option'], [role='slider']";
+
+function isTyping(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest(TYPING));
+}
+
+function imageFile(files: FileList | File[] | undefined | null) {
+  return Array.from(files ?? []).find(isDesignFile) ?? null;
+}
 
 const QUIET = "duration-200 ease-out motion-reduce:transition-none";
 const MOTION = "duration-[240ms] ease-out motion-reduce:transition-none";
@@ -258,7 +270,12 @@ export function Studio() {
   const frames = useState(createFrameStore)[0];
   const scaleRef = useRef(0);
   const scaleTimer = useRef(0);
-  const exportRef = useRef<((mode: ShotMode) => void) | null>(null);
+  const exportRef = useRef<TakeShot | null>(null);
+  const [pageUrl, setPageUrl] = useState(DEFAULT_URL);
+  const linkReady = useRef(false);
+  const [toast, setToast] = useState<{ text: string; key: number } | null>(null);
+  const toastTimer = useRef(0);
+  const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const openedRef = useRef("");
@@ -378,12 +395,107 @@ export function Studio() {
   }, []);
 
   useEffect(() => {
-    const first = deviceById("iphone-14");
-    const size = liveViewport(first, 0, "portrait");
-    attachSocket(DEFAULT_URL, size.width, size.height);
-    // Boot once with the default page.
+    bootFromLink();
+    // Boot once, from the shared link or the default page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!linkReady.current) return;
+    // The address bar always holds a link to this exact mockup.
+    const query = writeLink({
+      url: pageUrl,
+      device,
+      finish: finish.id,
+      background: useCustom ? null : background,
+      orientation,
+      open: hingeOpen,
+    });
+    const next = `${window.location.pathname}${query}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [background, device, finish.id, hingeOpen, orientation, pageUrl, useCustom]);
+
+  const actions = useRef({ copyImage, openLink, placeDesign });
+  useLayoutEffect(() => {
+    actions.current = { copyImage, openLink, placeDesign };
+  });
+
+  useEffect(() => {
+    // Cmd/Ctrl+C copies the mockup unless text is selected or a field has focus.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key !== "c" && event.key !== "C") return;
+      if (isTyping(event.target) || (window.getSelection()?.toString() ?? "") !== "") return;
+      event.preventDefault();
+      actions.current.copyImage();
+    };
+    // Pasting an image places it on the screen; pasting an address opens it.
+    const onPaste = (event: ClipboardEvent) => {
+      if (isTyping(event.target)) return;
+      const data = event.clipboardData;
+      if (!data) return;
+      const file = imageFile(data.files);
+      if (file) {
+        event.preventDefault();
+        actions.current.placeDesign(file);
+        return;
+      }
+      if (actions.current.openLink(data.getData("text/plain"))) event.preventDefault();
+    };
+    let depth = 0;
+    const carries = (event: DragEvent) => {
+      const types = Array.from(event.dataTransfer?.types ?? []);
+      return types.includes("Files") || types.includes("text/uri-list") || types.includes("text/plain");
+    };
+    const onDragEnter = (event: DragEvent) => {
+      if (!carries(event)) return;
+      event.preventDefault();
+      depth += 1;
+      setDragging(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (!carries(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const onDragLeave = () => {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      depth = 0;
+      setDragging(false);
+      const data = event.dataTransfer;
+      if (!data) return;
+      event.preventDefault();
+      const file = imageFile(data.files);
+      if (file) {
+        actions.current.placeDesign(file);
+        return;
+      }
+      if (data.files.length > 0) return;
+      const text = data.getData("text/uri-list").split("\n").find((line) => line && !line.startsWith("#")) ?? data.getData("text/plain");
+      actions.current.openLink(text);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
   useEffect(() => {
     return () => {
@@ -674,6 +786,7 @@ export function Studio() {
     pausedRef.current = false;
     quietRef.current = false;
     pageUrlRef.current = normalized;
+    setPageUrl(normalized);
     rememberFrame(null);
     setScreenSource("live");
     setScreen({ status: "loading", message: "Opening…" });
@@ -745,14 +858,84 @@ export function Studio() {
     setDeviceId(value);
   }
 
-  function takeShot(mode: ShotMode) {
+  function takeShot(mode: ShotMode, target: "download" | "clipboard" = "download") {
     const mark = markRef.current;
     if (mark) mark.style.visibility = "hidden";
     try {
-      exportRef.current?.(mode);
+      return exportRef.current?.(mode, target) ?? Promise.resolve(false);
     } finally {
       if (mark) mark.style.visibility = "";
     }
+  }
+
+  function showToast(text: string) {
+    window.clearTimeout(toastTimer.current);
+    setToast({ text, key: Date.now() });
+    toastTimer.current = window.setTimeout(() => setToast(null), 2000);
+  }
+
+  function copyImage() {
+    void takeShot("png", "clipboard").then((copied) =>
+      showToast(copied ? "Image copied" : "This browser can't copy images. Use Export instead."),
+    );
+  }
+
+  function copyLink() {
+    const href = window.location.href;
+    if (!navigator.clipboard?.writeText) {
+      showToast("Copy the address bar to share this mockup");
+      return;
+    }
+    navigator.clipboard.writeText(href).then(
+      () => showToast("Link copied"),
+      () => showToast("Copy the address bar to share this mockup"),
+    );
+  }
+
+  /** Opens a pasted or dropped address. Returns false when the text isn't one. */
+  function openLink(text: string) {
+    const value = text.trim().split(/\s+/)[0] ?? "";
+    if (!value || !isHttpUrl(value)) return false;
+    if (device.kind === "watch") {
+      showToast("Apple Watch shows designs only. Drop an image instead.");
+      return true;
+    }
+    const normalized = normalizeHttpUrl(value);
+    setUrl(normalized);
+    presentUrl(normalized);
+    return true;
+  }
+
+  function placeDesign(file: File) {
+    chooseDesign(designFamily(device), file);
+    showToast(`Design placed on the ${device.label}`);
+  }
+
+  function bootFromLink() {
+    const link = readLink(window.location.search);
+    const next = deviceById(link.device ?? LINK_DEFAULTS.device);
+    const open = hasHinge(next) ? (link.open ?? defaultOpen(next)) : false;
+    const turn = next.kind === "watch" || next.kind === "laptop" || next.kind === "desktop" ? "portrait" : (link.orientation ?? "portrait");
+    const target = link.url ?? DEFAULT_URL;
+    setDeviceId(next.id);
+    deviceIdRef.current = next.id;
+    if (link.finish) setFinishId(link.finish);
+    if (link.background) setBackground(link.background);
+    setOrientation(turn);
+    setHingeOpen(open);
+    aperturaRef.current = open ? 1 : 0;
+    setApertura(open ? 1 : 0);
+    if (next.kind === "watch") {
+      beforeWatch.current = { source: "live", orientation: "portrait" };
+      setScreenSource("design");
+    }
+    setUrl(target);
+    setPageUrl(target);
+    pageUrlRef.current = target;
+    linkReady.current = true;
+    // The watch has no live page; keep the session ready for the next device.
+    const size = next.kind === "watch" ? liveViewport(deviceById(LINK_DEFAULTS.device), 0, "portrait") : liveViewport(next, open ? 1 : 0, turn);
+    attachSocket(target, size.width, size.height);
   }
 
   const markOnLight = useCustom ? customDark !== true : background === "blanco" || background === "niebla";
@@ -805,6 +988,25 @@ export function Studio() {
           onHold={setHoldingMove}
           onUse={stopCinematic}
         />
+      ) : null}
+
+      <div aria-live="polite" className="pointer-events-none absolute bottom-[84px] left-1/2 z-30 -translate-x-1/2">
+        {toast ? (
+          <p
+            key={toast.key}
+            className="rounded-full bg-white px-3 py-1.5 text-[12px] whitespace-nowrap text-neutral-950 shadow-[0_8px_24px_rgba(23,23,23,0.12)] ring-1 ring-black/5"
+          >
+            {toast.text}
+          </p>
+        ) : null}
+      </div>
+
+      {dragging ? (
+        <div className="pointer-events-none absolute inset-3 z-50 grid place-items-center rounded-3xl border-2 border-dashed border-neutral-950/30 bg-white/40 backdrop-blur-[2px]">
+          <p className="rounded-full bg-neutral-950 px-4 py-2 text-[13px] text-white">
+            Drop an image to place it on the {device.label}, or a link to open it
+          </p>
+        </div>
       ) : null}
 
       <div
@@ -1304,6 +1506,7 @@ export function Studio() {
                   </div>
                 ) : null}
                 {flyout === "export" ? (
+                  <div className="flex flex-col gap-2">
                   <div className="grid grid-cols-2 gap-1.5">
                     <Button type="button" className="h-8 px-2 text-[13px]" onClick={() => takeShot("png")}>
                       PNG
@@ -1317,6 +1520,20 @@ export function Studio() {
                     <Button type="button" variant="outline" className="h-8 border-[#ebebeb] px-2 text-[13px]" onClick={() => takeShot("story")}>
                       Story
                     </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 border-t border-[#ebebeb] pt-2">
+                    <Button type="button" variant="outline" className="h-8 gap-1.5 border-[#ebebeb] px-2 text-[13px]" onClick={copyImage}>
+                      <Copy className="size-3.5" />
+                      Copy image
+                    </Button>
+                    <Button type="button" variant="outline" className="h-8 gap-1.5 border-[#ebebeb] px-2 text-[13px]" onClick={copyLink}>
+                      <Link2 className="size-3.5" />
+                      Copy link
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-neutral-400">
+                    {/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} copies the image. Paste or drop an image or a link anywhere.
+                  </p>
                   </div>
                 ) : null}
               </div>
