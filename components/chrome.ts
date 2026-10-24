@@ -8,6 +8,10 @@ const FALLBACK: Rgb = { r: 243, g: 243, b: 243 };
 let scratch: HTMLCanvasElement | null = null;
 let scratchCtx: CanvasRenderingContext2D | null = null;
 
+/** Reading pixels back stalls the GPU, so the bar colours are sampled at most this often. */
+const SAMPLE_MS = 400;
+let sampled: { at: number; width: number; height: number; top: Rgb; bottom: Rgb } | null = null;
+
 function sampleStrip(
   image: CanvasImageSource,
   sx: number,
@@ -421,7 +425,8 @@ export function paintScreen(
   reveal = 1,
   spin = 0,
 ) {
-  const scale = 2;
+  // Large screens stream at 1× (see dsfFor), so painting them at 2× only costs memory and upload time.
+  const scale = cssWidth * cssHeight > 600_000 ? 1 : 2;
   const width = Math.max(2, Math.round(cssWidth * scale));
   const height = Math.max(2, Math.round(cssHeight * scale));
   if (canvas.width !== width) canvas.width = width;
@@ -443,12 +448,20 @@ export function paintScreen(
   let bottomColor = FALLBACK;
   let drewFrame = false;
   if (frame && frameWidth > 0 && frameHeight > 0) {
-    try {
-      topColor = sampleStrip(frame, 0, 0, frameWidth, Math.max(1, Math.round(frameHeight * 0.02)));
-      bottomColor = sampleStrip(frame, 0, Math.max(0, frameHeight - 2), frameWidth, 2);
+    const now = performance.now();
+    if (sampled && sampled.width === frameWidth && sampled.height === frameHeight && now - sampled.at < SAMPLE_MS) {
+      topColor = sampled.top;
+      bottomColor = sampled.bottom;
       drewFrame = true;
-    } catch {
-      drewFrame = false;
+    } else {
+      try {
+        topColor = sampleStrip(frame, 0, 0, frameWidth, Math.max(1, Math.round(frameHeight * 0.02)));
+        bottomColor = sampleStrip(frame, 0, Math.max(0, frameHeight - 2), frameWidth, 2);
+        sampled = { at: now, width: frameWidth, height: frameHeight, top: topColor, bottom: bottomColor };
+        drewFrame = true;
+      } catch {
+        drewFrame = false;
+      }
     }
   }
 

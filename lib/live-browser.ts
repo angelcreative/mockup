@@ -8,10 +8,46 @@ import {
 import type { WebSocket } from "ws";
 
 import { profileForViewport, type ViewportProfile } from "./devices";
-import { parseClientMessage, type LiveServerMessage } from "./live-protocol";
+import { parseClientMessage, type LiveClientMessage, type LiveServerMessage } from "./live-protocol";
 import { CaptureError, assertPublicUrl } from "./ssrf";
 
 const IDLE_MS = 3 * 60 * 1000;
+/** A hidden tab gives the browser back sooner. */
+const PAUSED_IDLE_MS = 60 * 1000;
+/** Frame pacing: ~30 fps while someone is using the page, ~6 fps while it only animates by itself. */
+const ACTIVE_GAP_MS = 33;
+const RESTING_GAP_MS = 166;
+const ACTIVE_FOR_MS = 4000;
+/** If the client never confirms a frame, release the next one anyway. */
+const ACK_FALLBACK_MS = 1000;
+const MIN_SCALE = 0.6;
+
+/** Ads and analytics only cost CPU and memory in a preview. */
+const BLOCKED_TRACKERS = [
+  "google-analytics.com",
+  "googletagmanager.com",
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "adservice.google.com",
+  "connect.facebook.net",
+  "hotjar.com",
+  "clarity.ms",
+  "bat.bing.com",
+  "segment.io",
+  "segment.com",
+  "mixpanel.com",
+  "fullstory.com",
+  "criteo.com",
+  "criteo.net",
+  "taboola.com",
+  "outbrain.com",
+  "scorecardresearch.com",
+  "nr-data.net",
+];
+
+type InputMessage = Extract<LiveClientMessage, { type: "input" }>;
+type InputSlot = { kind: "move" | "wheel"; message: InputMessage };
 
 type ScreencastFrame = {
   data: string;
@@ -30,6 +66,15 @@ type Session = {
   chain: Promise<void>;
   closed: boolean;
   paused: boolean;
+  /** The frame on the wire, acknowledged to Chromium once the client has drawn it. */
+  inFlight: { sessionId: number; sentAt: number; fallback: NodeJS.Timeout } | null;
+  /** Chromium keeps up to two frames unacknowledged; the second waits here. */
+  queued: ScreencastFrame | null;
+  release: NodeJS.Timeout | null;
+  lastInput: number;
+  /** Device pixels per CSS pixel the client can actually show, capped by the profile. */
+  scale: number;
+  slot: InputSlot | null;
 };
 
 let browser: Browser | null = null;
@@ -93,6 +138,12 @@ async function getBrowser() {
       "--disable-extensions",
       "--no-first-run",
       "--renderer-process-limit=1",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--mute-audio",
+      "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache",
     ],
   });
   browser.on("disconnected", () => {
@@ -107,6 +158,52 @@ function mouseButton(button: number | undefined): "left" | "middle" | "right" {
   return "left";
 }
 
+function encodeScale(session: Session, profile: ViewportProfile) {
+  return Math.min(profile.dsf, Math.max(MIN_SCALE, session.scale));
+}
+
+function clearPacing(session: Session) {
+  if (session.inFlight) clearTimeout(session.inFlight.fallback);
+  session.inFlight = null;
+  session.queued = null;
+  if (session.release) clearTimeout(session.release);
+  session.release = null;
+}
+
+function sendFrame(session: Session, cdp: CDPSession, frame: ScreencastFrame) {
+  session.ws.send(Buffer.from(frame.data, "base64"));
+  session.inFlight = {
+    sessionId: frame.sessionId,
+    sentAt: Date.now(),
+    fallback: setTimeout(() => releaseFrame(session, cdp), ACK_FALLBACK_MS),
+  };
+}
+
+/**
+ * Chromium sends the next frame only after the previous one is acknowledged. Holding the
+ * ack until the client has drawn the frame keeps one frame on the wire instead of a queue,
+ * and the gap caps the frame rate, lower when nobody is touching the page.
+ */
+function releaseFrame(session: Session, cdp: CDPSession) {
+  const frame = session.inFlight;
+  if (!frame || session.release) return;
+  clearTimeout(frame.fallback);
+  const now = Date.now();
+  const gap = now - session.lastInput < ACTIVE_FOR_MS ? ACTIVE_GAP_MS : RESTING_GAP_MS;
+  const wait = Math.max(0, gap - (now - frame.sentAt));
+  const next = () => {
+    session.release = null;
+    session.inFlight = null;
+    if (session.closed || session.cdp !== cdp) return;
+    void cdp.send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => undefined);
+    const queued = session.queued;
+    session.queued = null;
+    if (queued && session.ws.readyState === session.ws.OPEN) sendFrame(session, cdp, queued);
+  };
+  if (wait === 0) next();
+  else session.release = setTimeout(next, wait);
+}
+
 async function bindScreencast(session: Session, profile: ViewportProfile) {
   const cdp = session.cdp;
   const ws = session.ws;
@@ -116,20 +213,29 @@ async function bindScreencast(session: Session, profile: ViewportProfile) {
   await stopScreencast(session);
   if (session.closed || session.cdp !== cdp) return;
   const onFrame = (event: ScreencastFrame) => {
-    void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
     if (session.closed || ws.readyState !== ws.OPEN) return;
-    if (ws.bufferedAmount > 750_000) return;
-    ws.send(Buffer.from(event.data, "base64"));
+    if (!session.inFlight) {
+      sendFrame(session, cdp, event);
+      return;
+    }
+    // A newer frame replaces one still waiting; letting the replaced one go lets
+    // Chromium carry on, which only happens if acks were lost.
+    const replaced = session.queued;
+    session.queued = event;
+    if (replaced) {
+      void cdp.send("Page.screencastFrameAck", { sessionId: replaced.sessionId }).catch(() => undefined);
+    }
   };
   cdp.on("Page.screencastFrame", onFrame);
   session.unbind = () => {
     cdp.off("Page.screencastFrame", onFrame);
   };
+  const scale = encodeScale(session, profile);
   return cdp.send("Page.startScreencast", {
     format: "jpeg",
     quality: 58,
-    maxWidth: profile.width * profile.dsf,
-    maxHeight: profile.height * profile.dsf,
+    maxWidth: Math.round(profile.width * scale),
+    maxHeight: Math.round(profile.height * scale),
     everyNthFrame: 1,
   });
 }
@@ -137,7 +243,18 @@ async function bindScreencast(session: Session, profile: ViewportProfile) {
 async function stopScreencast(session: Session) {
   session.unbind?.();
   session.unbind = null;
+  clearPacing(session);
   await session.cdp?.send("Page.stopScreencast").catch(() => undefined);
+}
+
+function isTracker(url: string) {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return BLOCKED_TRACKERS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
 }
 
 async function installRoutes(context: BrowserContext) {
@@ -145,6 +262,10 @@ async function installRoutes(context: BrowserContext) {
     const url = route.request().url();
     if (isBenign(url)) {
       await route.continue();
+      return;
+    }
+    if (isTracker(url)) {
+      await route.abort();
       return;
     }
     try {
@@ -234,14 +355,14 @@ async function closeSession(session: Session, killNow: boolean) {
   else scheduleBrowserKill();
 }
 
-function bumpIdle(session: Session) {
+function bumpIdle(session: Session, ms = IDLE_MS) {
   if (session.idle) clearTimeout(session.idle);
   session.idle = setTimeout(() => {
     send(session.ws, { type: "idle" });
     void closeSession(session, true).finally(() => {
       if (session.ws.readyState === session.ws.OPEN) session.ws.close();
     });
-  }, IDLE_MS);
+  }, ms);
 }
 
 function enqueue(session: Session, task: () => Promise<void>) {
@@ -249,7 +370,7 @@ function enqueue(session: Session, task: () => Promise<void>) {
   return session.chain;
 }
 
-async function handleInput(session: Session, message: Extract<ReturnType<typeof parseClientMessage>, { type: "input" }>) {
+async function handleInput(session: Session, message: InputMessage) {
   const page = session.page;
   const profile = session.profile;
   if (!page || !profile) return;
@@ -274,11 +395,50 @@ async function handleInput(session: Session, message: Extract<ReturnType<typeof 
   await page.mouse.wheel(message.deltaX ?? 0, message.deltaY ?? 0);
 }
 
+/**
+ * Moves and wheel steps that pile up while Chromium is busy merge into one: the newest
+ * pointer position, and the summed scroll. A click or release closes the open slot so
+ * nothing after it can jump ahead of it.
+ */
+function queueInput(session: Session, message: InputMessage) {
+  session.lastInput = Date.now();
+  const kind = message.action === "move" ? "move" : message.action === "wheel" ? "wheel" : null;
+  const open = session.slot;
+  if (kind && open?.kind === kind) {
+    open.message =
+      kind === "wheel"
+        ? {
+            ...message,
+            deltaX: (open.message.deltaX ?? 0) + (message.deltaX ?? 0),
+            deltaY: (open.message.deltaY ?? 0) + (message.deltaY ?? 0),
+          }
+        : message;
+    return;
+  }
+  const slot: InputSlot | null = kind ? { kind, message } : null;
+  session.slot = slot;
+  void enqueue(session, async () => {
+    if (slot && session.slot === slot) session.slot = null;
+    if (session.closed || active !== session) return;
+    try {
+      await handleInput(session, slot ? slot.message : message);
+    } catch (error) {
+      send(session.ws, { type: "error", message: publicError(error) });
+    }
+  });
+}
+
 export function attachLiveSocket(ws: WebSocket) {
   if (active && active.ws !== ws) {
     const previous = active;
+    if (!previous.closed && previous.ws.readyState === previous.ws.OPEN) {
+      // One Chromium page fits in this server. Whoever has it keeps it until they leave
+      // or go idle, instead of the newest visitor taking it away.
+      send(ws, { type: "error", message: "Someone else is using the live view. Try again in a few minutes." });
+      ws.close();
+      return;
+    }
     void closeSession(previous, false);
-    if (previous.ws.readyState === previous.ws.OPEN) previous.ws.close();
   }
 
   const session: Session = {
@@ -293,6 +453,12 @@ export function attachLiveSocket(ws: WebSocket) {
     chain: Promise.resolve(),
     closed: false,
     paused: false,
+    inFlight: null,
+    queued: null,
+    release: null,
+    lastInput: Date.now(),
+    scale: Infinity,
+    slot: null,
   };
   active = session;
   bumpIdle(session);
@@ -304,9 +470,32 @@ export function attachLiveSocket(ws: WebSocket) {
       send(ws, { type: "error", message: "Invalid request" });
       return;
     }
-    bumpIdle(session);
+    // Keep-alives, frame receipts and zoom hints are not someone using the page.
     if (parsed.type === "ping") return;
+    if (parsed.type === "frame") {
+      if (session.cdp) releaseFrame(session, session.cdp);
+      return;
+    }
+    if (parsed.type === "scale") {
+      const previous = session.scale;
+      session.scale = parsed.value;
+      void enqueue(session, async () => {
+        if (session.closed || active !== session || session.paused) return;
+        const profile = session.profile;
+        if (!profile || !session.page) return;
+        const before = Math.min(profile.dsf, Math.max(MIN_SCALE, previous));
+        if (Math.abs(encodeScale(session, profile) - before) < 0.05) return;
+        await bindScreencast(session, profile);
+      });
+      return;
+    }
+    if (parsed.type === "input") {
+      bumpIdle(session);
+      queueInput(session, parsed);
+      return;
+    }
     if (parsed.type === "pause") {
+      bumpIdle(session, PAUSED_IDLE_MS);
       session.paused = true;
       void enqueue(session, async () => {
         if (session.closed || active !== session) return;
@@ -314,6 +503,7 @@ export function attachLiveSocket(ws: WebSocket) {
       });
       return;
     }
+    bumpIdle(session);
     if (parsed.type === "resume") {
       session.paused = false;
       void enqueue(session, async () => {
@@ -349,9 +539,7 @@ export function attachLiveSocket(ws: WebSocket) {
             if (session.closed || session.paused || !session.profile) return;
             await bindScreencast(session, session.profile).catch(() => undefined);
           }
-          return;
         }
-        await handleInput(session, parsed);
       } catch (error) {
         send(ws, { type: "error", message: publicError(error) });
       }
