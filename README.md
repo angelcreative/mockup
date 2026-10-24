@@ -20,12 +20,16 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 
 1. Paste a URL, or keep the default, and press **Open**.
 2. Choose the device. Drag off the screen to orbit. On the screen, the pointer, click, and wheel go to the page.
-3. **Finish** lists only the colors Apple sells for that model.
-4. **Background** keeps White, Mist, and Black, and adds each Vibrant vista, Green glory, and Deep dusk variant (001–030) as CSS measured from that wallpaper. **Upload image** uses a picture from your computer.
-5. **Orientation** turns a phone or iPad to portrait or landscape. The browser viewport follows. The camera, buttons, Dynamic Island, and notch stay on the real edges. In landscape the clock, signal, and battery sit on the top edge, and the page stays below that bar and clear of the island or notch on the side.
-6. On iPhone Duo, **Opening** 0 is the closed phone (outer display) and 1 opens it fully (inner display across both leaves). The same page stays on the glass. Closed, the browser uses 466×585. Open, one viewport of 890×533 is split across the two panels.
-7. On a MacBook, **Lid** 0 is closed and 1 is a normal working angle. The page stays on the display while the lid is open. The menu bar uses the **Time** field, the same clock as the iPhone, iPad, and Duo status bar. Default time is 9:41.
-8. **Save image** downloads the current PNG, a transparent background, a square frame, or a 9:16 story frame.
+3. The **View** bar at the bottom moves the camera:
+   - **Rotate** (`R`) drags to orbit. **Move** (`H`) drags to slide the device across the viewport; the device itself is grabbable and the page ignores the pointer. Hold `Space` to move for a moment, or right-drag, Shift-drag, or two-finger drag in either mode.
+   - **−** / **+** (`-` / `+`) zoom; the percentage returns to the framed zoom. Arrow keys nudge the device, Shift for bigger steps.
+   - **Reset view** (`0`) eases back to the starting frame. Moving stops before the device leaves the frame.
+4. **Finish** lists only the colors Apple sells for that model.
+5. **Background** keeps White, Mist, and Black, and adds each Vibrant vista, Green glory, and Deep dusk variant (001–030) as CSS measured from that wallpaper. **Upload image** uses a picture from your computer.
+6. **Orientation** turns a phone or iPad to portrait or landscape. The browser viewport follows. The camera, buttons, Dynamic Island, and notch stay on the real edges. In landscape the clock, signal, and battery sit on the top edge, and the page stays below that bar and clear of the island or notch on the side.
+7. On iPhone Duo, **Opening** 0 is the closed phone (outer display) and 1 opens it fully (inner display across both leaves). The same page stays on the glass. Closed, the browser uses 466×585. Open, one viewport of 890×533 is split across the two panels.
+8. On a MacBook, **Lid** 0 is closed and 1 is a normal working angle. The page stays on the display while the lid is open. The menu bar uses the **Time** field, the same clock as the iPhone, iPad, and Duo status bar. Default time is 9:41.
+9. **Save image** downloads the current PNG, a transparent background, a square frame, or a 9:16 story frame.
 
 The status bar, menu bar, Dynamic Island, notch, and home indicator are device chrome. The page lives in the safe area and does not sit under that chrome.
 

@@ -21,6 +21,18 @@ export type CinematicId = "pull-back" | "push-in" | "orbit" | "reveal" | "settle
 
 export type CinematicShot = { id: CinematicId; token: number };
 
+export type ViewTool = "orbit" | "move";
+
+export type ViewState = { zoom: number; home: boolean };
+
+export type ViewApi = {
+  zoomBy: (factor: number) => void;
+  panBy: (x: number, y: number) => void;
+  reset: () => void;
+  read: () => ViewState;
+  subscribe: (listener: () => void) => () => void;
+};
+
 function makeCanvasTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -771,6 +783,7 @@ function FrameCamera({ span, insetLeft }: { span: number; insetLeft: number }) {
     const azimuth = 0.62;
     camera.position.set(Math.sin(azimuth) * distance, distance * 0.2, Math.cos(azimuth) * distance);
     camera.lookAt(0, 0, 0);
+    Object.assign(camera.userData, { home: camera.position.clone() });
     if (shift > 0 && size.height > 0) {
       camera.setViewOffset(size.width, size.height, -shift, 0, size.width, size.height);
     } else {
@@ -815,20 +828,24 @@ function ScreenPointer({
   viewportWidth,
   viewportHeight,
   orientation,
+  interactive,
   onInput,
 }: {
   viewportWidth: number;
   viewportHeight: number;
   orientation: Orientation;
+  interactive: boolean;
   onInput: (input: ScreenInput) => void;
 }) {
   const { camera, gl, scene, controls } = useThree();
   const onInputRef = useRef(onInput);
   const sizeRef = useRef({ viewportWidth, viewportHeight, orientation });
+  const interactiveRef = useRef(interactive);
 
   useEffect(() => {
     onInputRef.current = onInput;
     sizeRef.current = { viewportWidth, viewportHeight, orientation };
+    interactiveRef.current = interactive;
   });
 
   useEffect(() => {
@@ -953,6 +970,7 @@ function ScreenPointer({
     }
 
     function onPointerDown(event: PointerEvent) {
+      if (!interactiveRef.current) return;
       if (drag || !event.isPrimary) return;
       if (event.pointerType !== "touch" && event.button !== 0) return;
       const hit = pick(event);
@@ -1000,6 +1018,12 @@ function ScreenPointer({
         queueWheel(drag.cssX, drag.cssY, -deltaCssX, -deltaCssY);
         return;
       }
+      if (!interactiveRef.current) {
+        // Move mode grabs the device itself, so the glass hands every pointer back to the controls.
+        const current = orbit();
+        if (current) current.enabled = true;
+        return;
+      }
       if (event.buttons > 0) return;
       const hit = pick(event);
       const current = orbit();
@@ -1021,6 +1045,7 @@ function ScreenPointer({
     }
 
     function onWheel(event: WheelEvent) {
+      if (!interactiveRef.current) return;
       const hit = pick(event);
       if (!hit) return;
       event.preventDefault();
@@ -1273,6 +1298,184 @@ function Turntable({ enabled }: { enabled: boolean }) {
   return null;
 }
 
+const VIEW_SECONDS = 0.32;
+// How far from the centre the device may travel, as a share of the visible half-frame.
+const PAN_REACH = 0.42;
+
+type ViewControls = {
+  target: THREE.Vector3;
+  enabled: boolean;
+  minDistance: number;
+  maxDistance: number;
+};
+
+function clampFocus(camera: THREE.PerspectiveCamera, focus: THREE.Vector3, distance: number, depth: number) {
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const forward = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
+  const halfHeight = distance * Math.tan((camera.fov * Math.PI) / 360) * PAN_REACH;
+  const halfWidth = halfHeight * camera.aspect;
+  const clamp = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
+  return new THREE.Vector3()
+    .addScaledVector(right, clamp(focus.dot(right), halfWidth))
+    .addScaledVector(up, clamp(focus.dot(up), halfHeight))
+    .addScaledVector(forward, clamp(focus.dot(forward), depth));
+}
+
+function homePosition(camera: THREE.Camera) {
+  const home = camera.userData.home;
+  return home instanceof THREE.Vector3 ? home : new THREE.Vector3();
+}
+
+function ViewRig({
+  span,
+  viewRef,
+}: {
+  span: number;
+  viewRef: MutableRefObject<ViewApi | null>;
+}) {
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  const controls = useThree((state) => state.controls) as ViewControls | null;
+  const gl = useThree((state) => state.gl);
+  const invalidate = useThree((state) => state.invalidate);
+  const tween = useRef<{
+    fromPosition: THREE.Vector3;
+    toPosition: THREE.Vector3;
+    fromTarget: THREE.Vector3;
+    toTarget: THREE.Vector3;
+    elapsed: number;
+  } | null>(null);
+  const listeners = useRef(new Set<() => void>());
+  const last = useRef<ViewState>({ zoom: 1, home: true });
+  const limit = Math.max(2, span * 0.8);
+  const limitRef = useRef(limit);
+
+  useEffect(() => {
+    limitRef.current = limit;
+  }, [limit]);
+
+  useEffect(() => {
+    const target = () => controls?.target ?? new THREE.Vector3();
+
+
+    function move(toPosition: THREE.Vector3, toTarget: THREE.Vector3) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduced) {
+        tween.current = null;
+        target().copy(toTarget);
+        camera.position.copy(toPosition);
+        camera.lookAt(toTarget);
+      } else {
+        tween.current = {
+          fromPosition: camera.position.clone(),
+          toPosition,
+          fromTarget: target().clone(),
+          toTarget,
+          elapsed: 0,
+        };
+      }
+      invalidate();
+    }
+
+    function settled() {
+      const current = tween.current;
+      return current
+        ? { position: current.toPosition.clone(), target: current.toTarget.clone() }
+        : { position: camera.position.clone(), target: target().clone() };
+    }
+
+    viewRef.current = {
+      zoomBy(factor) {
+        const { position, target: focus } = settled();
+        const offset = position.clone().sub(focus);
+        const min = controls?.minDistance ?? RADIUS_MIN;
+        const max = controls?.maxDistance ?? RADIUS_MAX;
+        const distance = Math.min(max, Math.max(min, offset.length() / factor));
+        move(focus.clone().add(offset.setLength(distance)), focus);
+      },
+      panBy(x, y) {
+        const { position, target: focus } = settled();
+        const height = 2 * position.distanceTo(focus) * Math.tan((camera.fov * Math.PI) / 360);
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+        const wanted = focus
+          .clone()
+          .addScaledVector(right, -x * height)
+          .addScaledVector(up, -y * height);
+        const next = clampFocus(camera, wanted, position.distanceTo(focus), limitRef.current);
+        move(position.clone().add(next.clone().sub(focus)), next);
+      },
+      reset() {
+        move(homePosition(camera).clone(), new THREE.Vector3());
+      },
+      read: () => last.current,
+      subscribe(listener) {
+        listeners.current.add(listener);
+        return () => listeners.current.delete(listener);
+      },
+    };
+    return () => {
+      viewRef.current = null;
+    };
+  }, [camera, controls, invalidate, viewRef]);
+
+  useEffect(() => {
+    // Grabbing the scene takes over from a running zoom or reset.
+    const dom = gl.domElement;
+    const stop = () => {
+      tween.current = null;
+    };
+    dom.addEventListener("pointerdown", stop);
+    dom.addEventListener("wheel", stop, { passive: true });
+    return () => {
+      dom.removeEventListener("pointerdown", stop);
+      dom.removeEventListener("wheel", stop);
+    };
+  }, [gl]);
+
+  useFrame((_, delta) => {
+    const focus = controls?.target;
+    if (!focus) return;
+    const current = tween.current;
+    if (current) {
+      current.elapsed += Math.min(delta, 0.05);
+      const amount = easeInOut(current.elapsed / VIEW_SECONDS);
+      focus.lerpVectors(current.fromTarget, current.toTarget, amount);
+      camera.position.lerpVectors(current.fromPosition, current.toPosition, amount);
+      camera.lookAt(focus);
+      if (current.elapsed >= VIEW_SECONDS) tween.current = null;
+      invalidate();
+    } else if (focus.lengthSq() > 1e-8) {
+      // Panning stops before the device leaves the frame.
+      const kept = clampFocus(camera, focus, camera.position.distanceTo(focus), limitRef.current);
+      if (kept.distanceToSquared(focus) > 1e-8) {
+        camera.position.add(kept.clone().sub(focus));
+        focus.copy(kept);
+        camera.lookAt(focus);
+      }
+    }
+
+    const home = homePosition(camera);
+    const homeDistance = home.length();
+    const distance = camera.position.distanceTo(focus);
+    const next: ViewState = {
+      zoom: homeDistance > 0 && distance > 0 ? Math.round((homeDistance / distance) * 100) / 100 : 1,
+      home: focus.length() < 0.01 && camera.position.distanceTo(home) < 0.05,
+    };
+    if (next.zoom === last.current.zoom && next.home === last.current.home) return;
+    last.current = next;
+    listeners.current.forEach((listener) => listener());
+  });
+
+  return null;
+}
+
+const ORBIT_MOUSE = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+const MOVE_MOUSE = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+const ORBIT_TOUCH = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+const MOVE_TOUCH = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+
 function Stage({
   device,
   screen,
@@ -1294,6 +1497,8 @@ function Stage({
   designImage,
   designHold,
   designPending,
+  tool,
+  viewRef,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1315,6 +1520,8 @@ function Stage({
   designImage: HTMLImageElement | null;
   designHold: boolean;
   designPending: boolean;
+  tool: ViewTool;
+  viewRef: MutableRefObject<ViewApi | null>;
 }) {
   const { texture, leftTexture, rightTexture } = useDeviceTexture(
     device,
@@ -1368,7 +1575,10 @@ function Stage({
       />
       <OrbitControls
         makeDefault
-        enablePan={false}
+        enablePan
+        screenSpacePanning
+        mouseButtons={tool === "move" ? MOVE_MOUSE : ORBIT_MOUSE}
+        touches={tool === "move" ? MOVE_TOUCH : ORBIT_TOUCH}
         enableDamping
         dampingFactor={0.08}
         minDistance={7}
@@ -1378,6 +1588,7 @@ function Stage({
         minAzimuthAngle={-Infinity}
         maxAzimuthAngle={Infinity}
       />
+      <ViewRig span={span} viewRef={viewRef} />
       <Turntable enabled={autoRotate && !cinematic} />
       <Cinematic
         shot={cinematic}
@@ -1390,6 +1601,7 @@ function Stage({
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
         orientation={turned ? "landscape" : "portrait"}
+        interactive={tool === "orbit"}
         onInput={onInput}
       />
     </>
@@ -1417,6 +1629,8 @@ export default function Scene({
   designImage,
   designHold,
   designPending,
+  tool,
+  viewRef,
 }: {
   device: DeviceSpec;
   screen: ScreenState;
@@ -1438,6 +1652,8 @@ export default function Scene({
   designImage: HTMLImageElement | null;
   designHold: boolean;
   designPending: boolean;
+  tool: ViewTool;
+  viewRef: MutableRefObject<ViewApi | null>;
 }) {
   return (
     <Canvas
@@ -1478,6 +1694,8 @@ export default function Scene({
           designImage={designImage}
           designHold={designHold}
           designPending={designPending}
+          tool={tool}
+          viewRef={viewRef}
         />
       </Suspense>
     </Canvas>
