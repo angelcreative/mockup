@@ -32,6 +32,7 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 9. **Save image** downloads the current PNG, a transparent background, a square frame, or a 9:16 story frame.
 10. **Copy image** in Export, or `⌘C` / `Ctrl+C` anywhere outside a text field, puts the PNG on the clipboard. **Copy link** copies the address bar, which always holds the current page, device, finish, background, orientation, and opening, so a shared link restores the same mockup.
 11. Paste or drop an image anywhere to place it on the screen, or a link to open it. The **Add page url** field and the upload buttons still work as before.
+12. **Cinematics** plays a camera shot: Pull back, Push in, Orbit, Reveal, Settle (5 s each), or Loop 360° (8 s, a full turn at constant speed that repeats seamlessly). Playing a shot turns **Auto-rotate** off so the camera stays on the shot's last frame. **Record** plays the selected shot and saves it as a video, MP4 where the browser can encode it and WebM otherwise, in the **Current** window shape, **1:1**, or **9:16**; the shot is framed for that shape. The video is recorded in the browser at 2× pixel ratio, up to 1920 px on the long side, and never includes the controls. `Esc` cancels a take.
 
 The status bar, menu bar, Dynamic Island, notch, and home indicator are device chrome. The page lives in the safe area and does not sit under that chrome.
 

@@ -30,7 +30,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { CinematicId, CinematicShot, ScreenInput, ShotMode, TakeShot, ViewApi, ViewTool } from "@/components/scene";
+import type {
+  CinematicId,
+  CinematicShot,
+  RecordFormat,
+  Recorder,
+  ScreenInput,
+  ShotMode,
+  TakeShot,
+  ViewApi,
+  ViewTool,
+} from "@/components/scene";
 import { ViewDock } from "@/components/view-dock";
 import {
   BACKGROUNDS,
@@ -231,7 +241,21 @@ const CINEMATICS: { id: CinematicId; label: string }[] = [
   { id: "orbit", label: "Orbit" },
   { id: "reveal", label: "Reveal" },
   { id: "settle", label: "Settle" },
+  { id: "loop", label: "Loop 360°" },
 ];
+// The scene module loads lazily with three.js, so the shapes are listed here too.
+const RECORD_FORMATS: { id: RecordFormat; label: string; aspect?: number }[] = [
+  { id: "current", label: "Current" },
+  { id: "square", label: "1:1", aspect: 1 },
+  { id: "story", label: "9:16", aspect: 9 / 16 },
+];
+// Mirrors the shot lengths in the scene: every shot runs 5 s, the loop 8 s.
+const shotLength = (id: CinematicId) => (id === "loop" ? 8 : 5);
+
+function canRecordVideo() {
+  if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") return false;
+  return ["video/mp4", "video/webm"].some((type) => MediaRecorder.isTypeSupported(type));
+}
 
 function socketUrl() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -256,6 +280,12 @@ export function Studio() {
   const [holdingMove, setHoldingMove] = useState(false);
   const viewRef = useRef<ViewApi | null>(null);
   const stopCinematic = useCallback(() => setCinematic(null), []);
+  const [selectedShot, setSelectedShot] = useState<CinematicId>("orbit");
+  const [recordFormat, setRecordFormat] = useState<RecordFormat>("current");
+  const [recording, setRecording] = useState<{ id: CinematicId } | null>(null);
+  const [recordElapsed, setRecordElapsed] = useState(0);
+  const recorderRef = useRef<Recorder | null>(null);
+  const shotEnded = useRef(false);
   const [apertura, setApertura] = useState(0);
   const [hingeOpen, setHingeOpen] = useState(false);
   const aperturaRef = useRef(0);
@@ -396,12 +426,6 @@ export function Studio() {
   }, []);
 
   useEffect(() => {
-    bootFromLink();
-    // Boot once, from the shared link or the default page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     if (!linkReady.current) return;
     // The address bar always holds a link to this exact mockup.
     const query = writeLink({
@@ -418,10 +442,11 @@ export function Studio() {
     }
   }, [background, device, finish.id, hingeOpen, orientation, pageUrl, useCustom]);
 
-  const actions = useRef({ copyImage, openLink, placeDesign });
-  useLayoutEffect(() => {
-    actions.current = { copyImage, openLink, placeDesign };
-  });
+  const actions = useRef<{
+    copyImage: () => void;
+    openLink: (text: string) => boolean;
+    placeDesign: (file: File) => void;
+  } | null>(null);
 
   useEffect(() => {
     // Cmd/Ctrl+C copies the mockup unless text is selected or a field has focus.
@@ -430,7 +455,7 @@ export function Studio() {
       if (event.key !== "c" && event.key !== "C") return;
       if (isTyping(event.target) || (window.getSelection()?.toString() ?? "") !== "") return;
       event.preventDefault();
-      actions.current.copyImage();
+      actions.current?.copyImage();
     };
     // Pasting an image places it on the screen; pasting an address opens it.
     const onPaste = (event: ClipboardEvent) => {
@@ -440,10 +465,10 @@ export function Studio() {
       const file = imageFile(data.files);
       if (file) {
         event.preventDefault();
-        actions.current.placeDesign(file);
+        actions.current?.placeDesign(file);
         return;
       }
-      if (actions.current.openLink(data.getData("text/plain"))) event.preventDefault();
+      if (actions.current?.openLink(data.getData("text/plain"))) event.preventDefault();
     };
     let depth = 0;
     const carries = (event: DragEvent) => {
@@ -473,12 +498,12 @@ export function Studio() {
       event.preventDefault();
       const file = imageFile(data.files);
       if (file) {
-        actions.current.placeDesign(file);
+        actions.current?.placeDesign(file);
         return;
       }
       if (data.files.length > 0) return;
       const text = data.getData("text/uri-list").split("\n").find((line) => line && !line.startsWith("#")) ?? data.getData("text/plain");
-      actions.current.openLink(text);
+      actions.current?.openLink(text);
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("paste", onPaste);
@@ -497,6 +522,20 @@ export function Studio() {
   }, []);
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const startedAt = performance.now();
+    const tick = window.setInterval(() => setRecordElapsed(performance.now() - startedAt), 200);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCinematic(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearInterval(tick);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [recording]);
 
   useEffect(() => {
     return () => {
@@ -871,7 +910,7 @@ export function Studio() {
 
   function showToast(text: string) {
     window.clearTimeout(toastTimer.current);
-    setToast({ text, key: Date.now() });
+    setToast((current) => ({ text, key: (current?.key ?? 0) + 1 }));
     toastTimer.current = window.setTimeout(() => setToast(null), 2000);
   }
 
@@ -892,6 +931,63 @@ export function Studio() {
       () => showToast("Copy the address bar to share this mockup"),
     );
   }
+
+  /** Auto-rotate would drift away from the shot's last frame, so a shot switches it off. */
+  function playShot(id: CinematicId, record = false, aspect?: number) {
+    setAutoRotate(false);
+    setSelectedShot(id);
+    cinematicToken.current += 1;
+    setCinematic({ id, token: cinematicToken.current, record, aspect });
+  }
+
+  function startRecording() {
+    if (recording) return;
+    if (!canRecordVideo()) {
+      showToast("This browser can't record video");
+      return;
+    }
+    shotEnded.current = false;
+    setFlyout(null);
+    setRecordElapsed(0);
+    setRecording({ id: selectedShot });
+    playShot(selectedShot, true, RECORD_FORMATS.find((item) => item.id === recordFormat)?.aspect);
+  }
+
+  /** Runs once the shot stops: saves the video if it played to the end, else drops it. */
+  function finishRecording(current: { id: CinematicId }) {
+    const recorder = recorderRef.current;
+    const ended = shotEnded.current;
+    shotEnded.current = false;
+    if (!ended || !recorder) {
+      recorder?.cancel();
+      setRecording(null);
+      showToast("Recording cancelled");
+      return;
+    }
+    void recorder.stop().then((blob) => {
+      setRecording(null);
+      if (!blob) {
+        showToast("The video could not be recorded");
+        return;
+      }
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = `mockup-${current.id}.${blob.type.includes("mp4") ? "mp4" : "webm"}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 10_000);
+      showToast("Video saved");
+    });
+  }
+
+  useEffect(() => {
+    if (!recording || cinematic) return;
+    finishRecording(recording);
+    // finishRecording reads refs and the recorder; it only needs to run when the shot stops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cinematic, recording]);
 
   /** Opens a pasted or dropped address. Returns false when the text isn't one. */
   function openLink(text: string) {
@@ -939,6 +1035,18 @@ export function Studio() {
     attachSocket(target, size.width, size.height);
   }
 
+  useEffect(() => {
+    // Boot once, from the shared link or the default page. The link is only readable in the
+    // browser, so it is applied after the first render instead of during it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    bootFromLink();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useLayoutEffect(() => {
+    actions.current = { copyImage, openLink, placeDesign };
+  });
+
   const markOnLight = useCustom ? customDark !== true : background === "blanco" || background === "niebla";
   const expanded = shellMode === "expanded";
   const glassClearance = stageWidth < 900 && shellMode !== "icon" ? 72 : 0;
@@ -955,6 +1063,8 @@ export function Studio() {
           screen={screen}
           frames={frames}
           onScale={sendScale}
+          recordFormat={recording ? recordFormat : null}
+          recorderRef={recorderRef}
           apertura={apertura}
           orientation={orientation}
           light={light}
@@ -965,7 +1075,10 @@ export function Studio() {
           autoRotate={autoRotate}
           logoLight={logoLight}
           cinematic={cinematic}
-          onCinematicEnd={() => setCinematic(null)}
+          onCinematicEnd={() => {
+            if (recording) shotEnded.current = true;
+            setCinematic(null);
+          }}
           exportRef={exportRef}
           onInput={sendInput}
           insetLeft={glassClearance}
@@ -1001,6 +1114,18 @@ export function Studio() {
           </p>
         ) : null}
       </div>
+
+      {recording ? (
+        <div className="absolute inset-0 z-50 cursor-wait" aria-live="polite">
+          <div className="absolute top-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[12px] text-neutral-950 shadow-[0_8px_24px_rgba(23,23,23,0.12)] ring-1 ring-black/5">
+            <span aria-hidden className="size-2 animate-pulse rounded-full bg-red-500" />
+            <span className="tabular-nums">
+              REC {Math.min(shotLength(recording.id), recordElapsed / 1000).toFixed(1)} / {shotLength(recording.id)} s
+            </span>
+            <span className="text-neutral-400">· Esc to cancel</span>
+          </div>
+        </div>
+      ) : null}
 
       {dragging ? (
         <div className="pointer-events-none absolute inset-3 z-50 grid place-items-center rounded-3xl border-2 border-dashed border-neutral-950/30 bg-white/40 backdrop-blur-[2px]">
@@ -1491,26 +1616,53 @@ export function Studio() {
                   </div>
                 ) : null}
                 {flyout === "cinematics" ? (
-                  <div className="flex flex-col gap-1">
-                    {CINEMATICS.map((item) => {
-                      const playing = cinematic?.id === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          aria-pressed={playing}
-                          onClick={() => {
-                            cinematicToken.current += 1;
-                            setCinematic({ id: item.id, token: cinematicToken.current });
-                          }}
-                          className={`h-8 rounded-md px-2.5 text-left text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                            playing ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-100"
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      );
-                    })}
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1">
+                      {CINEMATICS.map((item) => {
+                        const playing = cinematic?.id === item.id;
+                        const selected = selectedShot === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => playShot(item.id)}
+                            className={`flex h-8 items-center justify-between rounded-md px-2.5 text-left text-[13px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                              playing || selected ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-100"
+                            }`}
+                          >
+                            {item.label}
+                            <span className={playing || selected ? "text-white/60" : "text-neutral-400"}>
+                              {shotLength(item.id)} s
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-col gap-2 border-t border-[#ebebeb] pt-3">
+                      <div className="grid grid-cols-3 rounded-lg border border-[#ebebeb] p-0.5" role="group" aria-label="Video format">
+                        {RECORD_FORMATS.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            aria-pressed={recordFormat === item.id}
+                            onClick={() => setRecordFormat(item.id)}
+                            className={`h-7 rounded-md text-[12px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
+                              recordFormat === item.id ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-50"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <Button type="button" className="h-9 gap-2 text-[13px]" onClick={startRecording}>
+                        <span aria-hidden className="size-2 rounded-full bg-red-500" />
+                        Record {CINEMATICS.find((item) => item.id === selectedShot)?.label}
+                      </Button>
+                      <p className="text-[11px] text-neutral-400">
+                        Plays the selected shot and saves it as a video. Loop 360° repeats seamlessly.
+                      </p>
+                    </div>
                   </div>
                 ) : null}
                 {flyout === "export" ? (
