@@ -12,12 +12,12 @@ import {
   DUO_OUTER_HEIGHT,
   DUO_OUTER_WIDTH,
   ISLAND_POINTS,
+  DUO_HOLE_POINTS,
   NOTCH_POINTS,
   isDuoOpen,
 } from "@/lib/devices";
 import {
   frameSize,
-  halfPillGeometry,
   roundedBodyGeometry,
   roundedRectGeometry,
   topNotchGeometry,
@@ -223,7 +223,7 @@ function hitData(
     glassWidth,
     topInset: 59,
     bottomInset: 34,
-    cutout: "island" as const,
+    cutout: "hole" as const,
     landscapeStatus: 32,
   };
 }
@@ -273,28 +273,9 @@ function DuoMesh({
       [outerW, outerH, radius],
     ),
   );
-  const outerIsland = useDisposable(
-    useMemo(() => {
-      const height = outerH * (ISLAND_POINTS.height / DUO_OUTER_HEIGHT);
-      const width = outerW * (ISLAND_POINTS.width / DUO_OUTER_WIDTH);
-      return roundedRectGeometry(width, height, height / 2);
-    }, [outerH, outerW]),
-  );
-  const innerIsland = useDisposable(
-    useMemo(() => {
-      const height = innerH * (ISLAND_POINTS.height / DUO_INNER_HEIGHT);
-      const width = ((innerHalfW * 2) * (ISLAND_POINTS.width / DUO_INNER_WIDTH)) / 2;
-      return {
-        height,
-        width,
-        left: halfPillGeometry(width, height, "left"),
-        right: halfPillGeometry(width, height, "right"),
-        dispose() {
-          this.left.dispose();
-          this.right.dispose();
-        },
-      };
-    }, [innerH, innerHalfW]),
+  const holeRadius = (outerW * (DUO_HOLE_POINTS.size / DUO_OUTER_WIDTH)) / 2;
+  const outerHole = useDisposable(
+    useMemo(() => new THREE.CircleGeometry(holeRadius, 40), [holeRadius]),
   );
 
   // The bevel shifts the caps: the front lip is inside +depth/2, the back lip is past -depth/2.
@@ -306,10 +287,8 @@ function DuoMesh({
   const centerShift = (bodyW / 2) * (1 - apertura);
   const stack = (depth + 0.07) * (1 - apertura);
   const innerShift = (bodyW - innerHalfW) / 2 + 0.04;
-  const outerIslandH = outerH * (ISLAND_POINTS.height / DUO_OUTER_HEIGHT);
-  const outerIslandY = outerH / 2 - outerH * (ISLAND_POINTS.top / DUO_OUTER_HEIGHT) - outerIslandH / 2;
-  const innerIslandY = innerH / 2 - innerH * (ISLAND_POINTS.top / DUO_INNER_HEIGHT) - innerIsland.height / 2;
-  const islandOverlap = innerIsland.width * 0.1;
+  const holeX = -outerW / 2 + outerW * (DUO_HOLE_POINTS.left / DUO_OUTER_WIDTH) + holeRadius;
+  const holeY = outerH / 2 - outerH * (DUO_HOLE_POINTS.top / DUO_OUTER_HEIGHT) - holeRadius;
   const hingeMetal = "#c5ccd4";
 
   return (
@@ -330,11 +309,6 @@ function DuoMesh({
           >
           <meshBasicMaterial map={leftTexture} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
-        {open ? (
-          <mesh geometry={innerIsland.left} position={[bodyW / 2 + islandOverlap, innerIslandY, frontZ + 0.003]}>
-            <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
-          </mesh>
-        ) : null}
         <RearModule rear="iphone-duo" bodyW={bodyW} bodyH={bodyH} depth={depth} radius={radius} />
         <AppleLogo
           size={Math.min(bodyW, bodyH) * 0.16}
@@ -357,14 +331,6 @@ function DuoMesh({
           >
             <meshBasicMaterial map={rightTexture} toneMapped={false} side={THREE.DoubleSide} />
           </mesh>
-          {open ? (
-            <mesh
-              geometry={innerIsland.right}
-              position={[-bodyW / 2 - gap - islandOverlap, innerIslandY, frontZ + 0.003]}
-            >
-              <meshBasicMaterial color="#050505" side={THREE.DoubleSide} />
-            </mesh>
-          ) : null}
           <group position={[0, 0, backZ]} rotation={[0, Math.PI, 0]}>
             <mesh
               geometry={outerGlass}
@@ -374,7 +340,7 @@ function DuoMesh({
               <meshBasicMaterial map={texture} toneMapped={false} side={THREE.DoubleSide} />
             </mesh>
             {open ? null : (
-              <mesh geometry={outerIsland} position={[0, outerIslandY, 0.003]}>
+              <mesh geometry={outerHole} position={[holeX, holeY, 0.003]}>
                 <meshBasicMaterial color="#050505" />
               </mesh>
             )}

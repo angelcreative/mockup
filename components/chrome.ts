@@ -1,5 +1,5 @@
 import type { DeviceSpec, ScreenStatus } from "@/lib/devices";
-import { isComputer, landscapeStatusPx } from "@/lib/devices";
+import { duoHole, isComputer, landscapeStatusPx } from "@/lib/devices";
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -157,7 +157,9 @@ function drawStatusBar(
   context.textBaseline = "middle";
   context.textAlign = "left";
   context.font = `600 ${15 * scale}px ${fontFamily()}`;
-  context.fillText(time, 22 * scale, bandH / 2);
+  // The clock starts past the cover's camera hole.
+  const hole = duoHole(device, cssWidth);
+  context.fillText(time, (hole ? hole.left + hole.size + 10 : 22) * scale, bandH / 2);
 
   const right = cssWidth * scale - 16 * scale;
   drawStatusIcons(context, right, bandH / 2, scale);

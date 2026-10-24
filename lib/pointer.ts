@@ -10,7 +10,7 @@ export type PointerHit = {
   bottomInset: number;
   /** Full glass width. Duo panels pass the whole display, not one leaf. */
   glassWidth?: number;
-  cutout?: "notch" | "island" | "none";
+  cutout?: "notch" | "island" | "hole" | "none";
   /** Landscape status-bar thickness, in CSS px of the glass width. */
   landscapeStatus?: number;
 };
