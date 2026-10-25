@@ -16,14 +16,11 @@ export type DeviceId =
   | "macbook-air-15"
   | "macbook-pro-14"
   | "macbook-pro-16"
-  | "imac-24"
-  | "watch-42"
-  | "watch-46"
-  | "watch-ultra-49";
+  | "imac-24";
 
 export type Cutout = "notch" | "island" | "hole" | "none";
 
-export type DeviceKind = "phone" | "tablet" | "duo" | "laptop" | "desktop" | "watch";
+export type DeviceKind = "phone" | "tablet" | "duo" | "laptop" | "desktop";
 
 export type CameraEdge = "none" | "top" | "right";
 
@@ -413,69 +410,7 @@ export const DEVICES: readonly DeviceSpec[] = [
     rear: "none",
     buttons: "none",
   },
-  {
-    id: "watch-42",
-    label: "Apple Watch 42mm",
-    width: 187,
-    height: 223,
-    cutout: "none",
-    finishes: [
-      { id: "jet-black", label: "Jet black", color: "#1c1c1e", ...aluminum },
-      { id: "plata", label: "Silver", color: "#e4e4e6", ...aluminum },
-      { id: "oro-rosa", label: "Rose gold", color: "#e6c2b8", ...aluminum },
-      { id: "gris-espacial", label: "Space gray", color: "#6e6e73", ...aluminum },
-    ],
-    kind: "watch",
-    topInset: 0,
-    bottomInset: 0,
-    camera: "none",
-    rear: "none",
-    buttons: "none",
-  },
-  {
-    id: "watch-46",
-    label: "Apple Watch 46mm",
-    width: 208,
-    height: 248,
-    cutout: "none",
-    finishes: [
-      { id: "jet-black", label: "Jet black", color: "#1c1c1e", ...aluminum },
-      { id: "plata", label: "Silver", color: "#e4e4e6", ...aluminum },
-      { id: "oro-rosa", label: "Rose gold", color: "#e6c2b8", ...aluminum },
-      { id: "gris-espacial", label: "Space gray", color: "#6e6e73", ...aluminum },
-    ],
-    kind: "watch",
-    topInset: 0,
-    bottomInset: 0,
-    camera: "none",
-    rear: "none",
-    buttons: "none",
-  },
-  {
-    id: "watch-ultra-49",
-    label: "Apple Watch Ultra 49mm",
-    width: 211,
-    height: 257,
-    cutout: "none",
-    finishes: [
-      { id: "titanio-natural", label: "Natural titanium", color: "#c4bbae", ...titanium },
-      { id: "titanio-negro", label: "Black titanium", color: "#3a3a3c", ...titanium },
-    ],
-    kind: "watch",
-    topInset: 0,
-    bottomInset: 0,
-    camera: "none",
-    rear: "none",
-    buttons: "none",
-  },
 ];
-
-/** Case millimetres for the procedural watch. Screen pixels stay on the device spec. */
-export const WATCH_CASE = {
-  "watch-42": { width: 36, height: 42, depth: 9.7 },
-  "watch-46": { width: 39, height: 46, depth: 9.7 },
-  "watch-ultra-49": { width: 44, height: 49, depth: 12 },
-} as const;
 
 export const BACKGROUNDS = [
   { id: "blanco", label: "White", color: "#ffffff", css: "#ffffff" },
@@ -525,21 +460,19 @@ export function duoScreen(apertura: number) {
   return { width: DUO_OUTER_WIDTH, height: DUO_OUTER_HEIGHT, split: false as const };
 }
 
-export type DesignFamily = "mobile" | "tablet" | "laptop" | "desktop" | "watch";
+export type DesignFamily = "mobile" | "tablet" | "laptop" | "desktop";
 
 export const DESIGN_ROWS: readonly { id: DesignFamily; label: string; defaultId: DeviceId }[] = [
   { id: "mobile", label: "Mobile", defaultId: "iphone-16" },
   { id: "tablet", label: "Tablet", defaultId: "ipad-pro-13" },
   { id: "laptop", label: "Laptop", defaultId: "macbook-pro-14" },
   { id: "desktop", label: "Desktop", defaultId: "imac-24" },
-  { id: "watch", label: "Watch", defaultId: "watch-46" },
 ];
 
 export function designFamily(device: DeviceSpec): DesignFamily {
   if (device.kind === "tablet") return "tablet";
   if (device.kind === "laptop") return "laptop";
   if (device.kind === "desktop") return "desktop";
-  if (device.kind === "watch") return "watch";
   return "mobile";
 }
 
@@ -632,7 +565,6 @@ export function profileForViewport(width: number, height: number): ViewportProfi
   if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
 
   for (const device of DEVICES) {
-    if (device.kind === "watch") continue;
     if (!matchesViewport(device, width, height)) continue;
     if (isComputer(device)) {
       return {

@@ -25,7 +25,6 @@ import {
 import { RearModule, SideControls } from "@/components/hardware";
 import { AppleLogo } from "@/components/logo";
 import { ImacMesh, LaptopMesh, macFoot, macScreenSize, macSpan } from "@/components/macs";
-import { WatchMesh, watchFrame } from "@/components/watch";
 import { landscapeStatusPx } from "@/lib/devices";
 
 function useDisposable<T extends { dispose: () => void }>(geometry: T) {
@@ -399,17 +398,10 @@ export function DeviceModel({
   if (device.kind === "desktop") {
     return <ImacMesh device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
   }
-  if (device.kind === "watch") {
-    return <WatchMesh device={device} texture={texture} finish={finish} />;
-  }
   return <Slab device={device} texture={texture} status={status} finish={finish} logoLight={logoLight} />;
 }
 
 export function deviceScreenSize(device: DeviceSpec, orientation: Orientation, apertura: number) {
-  if (device.kind === "watch") {
-    const frame = watchFrame(device);
-    return { width: frame.screenW, height: frame.screenH };
-  }
   if (device.kind === "laptop" || device.kind === "desktop") return macScreenSize(device, apertura);
   if (device.id === "iphone-duo") {
     const open = isDuoOpen(apertura);
@@ -427,7 +419,6 @@ export function deviceScreenSize(device: DeviceSpec, orientation: Orientation, a
 }
 
 export function deviceSpan(device: DeviceSpec, apertura: number) {
-  if (device.kind === "watch") return watchFrame(device).bodyH;
   if (device.kind === "laptop" || device.kind === "desktop") return macSpan(device, apertura);
   if (device.id === "iphone-duo") {
     const width = (isDuoOpen(apertura) ? DUO_BODY.openWidth : DUO_BODY.closedWidth) * DUO_CM;
@@ -442,7 +433,6 @@ export function deviceFoot(
   orientation: Orientation = "portrait",
   apertura = 0,
 ) {
-  if (device.kind === "watch") return watchFrame(device).bodyH;
   if (device.kind === "laptop" || device.kind === "desktop") return macFoot(device, apertura);
   if (device.id === "iphone-duo") {
     const vertical =
