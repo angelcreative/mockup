@@ -59,7 +59,14 @@ import {
 } from "@/lib/devices";
 import { createFrameStore } from "@/lib/frame-store";
 import { defaultOpen, hasHinge, isHttpUrl, LINK_DEFAULTS, readLink, writeLink } from "@/lib/link";
-import { CaptureFailed, captureKey, fetchCapture, type PageCapture } from "@/lib/page-capture";
+import {
+  CaptureFailed,
+  captureKey,
+  fetchCapture,
+  warmCapture,
+  warmServer,
+  type PageCapture,
+} from "@/lib/page-capture";
 import { PageScroller } from "@/lib/page-scroller";
 import { normalizeHttpUrl } from "@/lib/url";
 
@@ -90,11 +97,20 @@ const PREFETCH = DESIGN_ROWS.filter((row) => row.id !== "desktop").map((row) =>
   liveViewport(deviceById(row.defaultId), 0, "portrait"),
 );
 
+/** Slow pages get a word of reassurance under the placeholder after these many seconds. */
+const SLOW_NOTES = [
+  { after: 6000, text: "This site is taking a while…" },
+  { after: 15000, text: "Almost there…" },
+];
+/** A stand-in from another layout (a desktop page on a phone) looks broken, so it must be this close. */
+const STAND_IN_RATIO = 1.45;
+
 /** The cached capture closest in size, shown while the exact one is on its way. */
 function nearestCapture(captures: Iterable<PageCapture>, width: number, height: number) {
   let best: PageCapture | null = null;
   let bestScore = Infinity;
   for (const capture of captures) {
+    if (Math.max(capture.width / width, width / capture.width) > STAND_IN_RATIO) continue;
     const score = Math.abs(Math.log(capture.width / width)) * 4 + Math.abs(Math.log(capture.viewportHeight / height));
     if (score < bestScore) {
       best = capture;
@@ -313,6 +329,7 @@ export function Studio() {
   const freshRef = useRef(false);
   const prefetchedRef = useRef("");
   const [loadToken, setLoadToken] = useState(0);
+  const warmTimer = useRef(0);
   const exportRef = useRef<TakeShot | null>(null);
   const [pageUrl, setPageUrl] = useState(DEFAULT_URL);
   const linkReady = useRef(false);
@@ -341,7 +358,7 @@ export function Studio() {
   const device = deviceById(deviceId);
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura, orientation);
-  const opening = screen.status === "loading" && screen.message === "Opening…";
+  const opening = screen.status === "loading";
   const handheld = device.kind === "phone" || device.kind === "tablet" || device.kind === "duo";
 
   function setHinge(open: boolean) {
@@ -408,8 +425,20 @@ export function Studio() {
       scroller().clear();
       setScreen({ status: "loading", message: "Opening…" });
     }
+    // The first screen comes back in about a second; the full page follows and takes its place.
+    let full: PageCapture | null = null;
+    if (!near) {
+      fetchCapture(url, width, height, { urgent: true, fresh, part: "top" })
+        .then(async (top) => {
+          if (full || request !== requestRef.current) return;
+          if (!top.partial) store.set(key, top);
+          if ((await scroller().show(top, width, height)) && !full) markReady();
+        })
+        .catch(() => undefined);
+    }
     fetchCapture(url, width, height, { urgent: true, fresh })
       .then(async (capture) => {
+        full = capture;
         store.set(key, capture);
         if (request !== requestRef.current) return;
         if (await scroller().show(capture, width, height)) markReady();
@@ -417,8 +446,8 @@ export function Studio() {
       })
       .catch((error: unknown) => {
         if (request !== requestRef.current) return;
-        const message = error instanceof CaptureFailed ? error.message : "Could not open this page";
-        if (near) showToast(message);
+        const message = error instanceof CaptureFailed ? error.message : "Could not open this page.";
+        if (near || scroller().current?.url === url) showToast(message);
         else setScreen({ status: "error", message });
       });
   }
@@ -449,6 +478,19 @@ export function Studio() {
     // showPage reads the page, the viewport and the device; these are what change them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageUrl, loadToken, viewport.width, viewport.height, device.kind]);
+
+  const waiting = screen.status === "loading";
+  useEffect(() => {
+    if (!waiting) return;
+    const timers = SLOW_NOTES.map((note) =>
+      window.setTimeout(() => {
+        setScreen((current) => (current.status === "loading" ? { ...current, message: note.text } : current));
+      }, note.after),
+    );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [waiting, loadToken]);
+
+  useEffect(() => () => window.clearTimeout(warmTimer.current), []);
 
   useEffect(() => {
     if (!linkReady.current) return;
@@ -735,8 +777,9 @@ export function Studio() {
       return;
     }
 
-    // Opening a page on purpose takes a new capture rather than one from a few minutes ago.
-    freshRef.current = true;
+    // Opening the page already on screen again asks for a new capture; a new address may use
+    // one the server already holds, e.g. from warming it while it was typed.
+    freshRef.current = normalized === pageUrl;
     prefetchedRef.current = "";
     setPageUrl(normalized);
     setLoadToken((token) => token + 1);
@@ -903,7 +946,18 @@ export function Studio() {
     showToast(`Design placed on the ${device.label}`);
   }
 
+  /** While an address is typed or pasted, the server starts capturing it, so Open is nearly instant. */
+  function typeUrl(value: string) {
+    setUrl(value);
+    window.clearTimeout(warmTimer.current);
+    if (!isHttpUrl(value)) return;
+    const normalized = normalizeHttpUrl(value.trim());
+    if (normalized === pageUrl) return;
+    warmTimer.current = window.setTimeout(() => warmCapture(normalized, viewport.width, viewport.height), 600);
+  }
+
   function bootFromLink() {
+    warmServer();
     const link = readLink(window.location.search);
     const next = deviceById(link.device ?? LINK_DEFAULTS.device);
     const open = hasHinge(next) ? (link.open ?? defaultOpen(next)) : false;
@@ -1192,7 +1246,7 @@ export function Studio() {
                       />
                       {(
                         [
-                          ["live", "Live URL"],
+                          ["live", "Page URL"],
                           ["design", "Upload design"],
                         ] as const
                       ).map(([value, label]) => (
@@ -1268,7 +1322,7 @@ export function Studio() {
                       <form onSubmit={openPage} className="flex items-center gap-2">
                         <Input
                           value={url}
-                          onChange={(event) => setUrl(event.target.value)}
+                          onChange={(event) => typeUrl(event.target.value)}
                           placeholder={DEFAULT_URL}
                           aria-label="Site URL"
                           inputMode="url"

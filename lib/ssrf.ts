@@ -115,7 +115,7 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   try {
     records = await lookup(hostname, { all: true, verbatim: true });
   } catch {
-    throw new CaptureError(400, "Could not resolve that address");
+    throw new CaptureError(400, "That address doesn't exist. Check the spelling.");
   }
 
   if (records.length === 0 || records.some((record) => isBlockedIp(record.address))) {

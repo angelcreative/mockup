@@ -265,6 +265,93 @@ function drawLoader(
   context.restore();
 }
 
+/**
+ * A page-shaped placeholder: a bar, a hero, headings, text and cards, swept by a soft
+ * highlight. `phase` (radians) moves the sweep; `continued` skips the bar and hero, for the
+ * part of a page below what has been captured so far.
+ */
+export function paintSkeleton(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  phase: number,
+  continued = false,
+) {
+  if (width < 8 || height < 8) return;
+  const unit = Math.max(0.5, Math.min(width / 390, height / 640));
+  const pad = 18 * unit;
+  const inner = Math.min(width - pad * 2, 1100 * unit);
+  const left = x + (width - inner) / 2;
+  const block = (bx: number, by: number, bw: number, bh: number, radius: number) => {
+    if (by > y + height || by + bh < y) return;
+    roundRect(context, bx, by, bw, bh, radius);
+    context.fill();
+  };
+  context.save();
+  context.beginPath();
+  context.rect(x, y, width, height);
+  context.clip();
+  context.fillStyle = "#e9e9e9";
+  let cursor = y;
+  if (!continued) {
+    context.fillRect(x, y, width, 52 * unit);
+    cursor += 52 * unit + pad;
+    const hero = Math.min(height * 0.34, 300 * unit);
+    block(left, cursor, inner, hero, 14 * unit);
+    cursor += hero + pad * 1.4;
+  } else {
+    cursor += pad;
+  }
+  // Text and cards repeat down the page.
+  const widths = [0.62, 0.94, 0.86, 0.72];
+  while (cursor < y + height) {
+    block(left, cursor, inner * widths[0], 20 * unit, 6 * unit);
+    cursor += 20 * unit + pad;
+    for (const share of widths.slice(1)) {
+      block(left, cursor, inner * share, 11 * unit, 5 * unit);
+      cursor += 22 * unit;
+    }
+    cursor += pad;
+    const gap = 12 * unit;
+    const card = (inner - gap) / 2;
+    block(left, cursor, card, 118 * unit, 12 * unit);
+    block(left + card + gap, cursor, card, 118 * unit, 12 * unit);
+    cursor += 118 * unit + pad * 1.6;
+  }
+  // The sweep crosses the area every turn of the phase.
+  const travel = width * 1.6;
+  const offset = x - width * 0.3 + ((((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * travel;
+  const sweep = context.createLinearGradient(offset - width * 0.25, y, offset + width * 0.25, y + height * 0.12);
+  sweep.addColorStop(0, "rgba(255,255,255,0)");
+  sweep.addColorStop(0.5, "rgba(255,255,255,0.55)");
+  sweep.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = sweep;
+  context.fillRect(x, y, width, height);
+  context.restore();
+}
+
+/** A quiet line under the placeholder when a page is slow, e.g. "Still loading…". */
+function drawCaption(context: CanvasRenderingContext2D, text: string, x: number, y: number, width: number, height: number) {
+  const unit = Math.max(0.5, Math.min(width / 390, height / 640));
+  const size = 13 * unit;
+  context.save();
+  context.font = `500 ${size}px ${fontFamily()}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  const pillW = Math.min(width * 0.86, context.measureText(text).width + 28 * unit);
+  const pillH = 30 * unit;
+  const cx = x + width / 2;
+  const cy = y + height - 56 * unit;
+  context.fillStyle = "rgba(23,23,23,0.82)";
+  roundRect(context, cx - pillW / 2, cy - pillH / 2, pillW, pillH, pillH / 2);
+  context.fill();
+  context.fillStyle = "#ffffff";
+  context.fillText(text, cx, cy);
+  context.restore();
+}
+
 function wrapLines(context: CanvasRenderingContext2D, message: string, maxWidth: number) {
   const words = message.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -503,11 +590,34 @@ export function paintScreen(
 
   const showLoader = reveal < 1 && !recovery && status !== "empty";
   if (showLoader) {
+    // The placeholder is laid out in page space, so a turned device gets it turned too.
+    const skeleton = (sx: number, sw: number) => {
+      if (!landscape) {
+        paintSkeleton(context, sx, top, sw, pageH, spin);
+        return;
+      }
+      context.save();
+      context.translate(sx + sw / 2, top + pageH / 2);
+      context.rotate(Math.PI / 2);
+      paintSkeleton(context, -pageH / 2, -sw / 2, pageH, sw, spin);
+      context.restore();
+    };
     if (splitMessage) {
-      drawLoader(context, 0, top, pageW / 2, pageH, spin);
-      drawLoader(context, pageW / 2, top, pageW / 2, pageH, spin);
+      skeleton(0, pageW / 2);
+      skeleton(pageW / 2, pageW / 2);
     } else {
-      drawLoader(context, 0, top, pageW, pageH, spin);
+      skeleton(0, pageW);
+    }
+    if (message && message !== "Opening…") {
+      if (landscape) {
+        context.save();
+        context.translate(pageW / 2, top + pageH / 2);
+        context.rotate(Math.PI / 2);
+        drawCaption(context, message, -pageH / 2, -pageW / 2, pageH, pageW);
+        context.restore();
+      } else {
+        drawCaption(context, message, 0, top, pageW, pageH);
+      }
     }
   }
 
