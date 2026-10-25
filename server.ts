@@ -3,7 +3,7 @@ import { parse } from "node:url";
 
 import next from "next";
 
-import { handleCapture, shutdownBrowser } from "./lib/capture";
+import { handleCapture, shutdownBrowser, warmBrowser, warmDefault } from "./lib/capture";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -15,6 +15,13 @@ const server = createServer((req, res) => {
   const parsed = parse(req.url || "/", true);
   if (parsed.pathname === "/api/capture") {
     void handleCapture(req, res);
+    return;
+  }
+  if (parsed.pathname === "/api/warm") {
+    // The studio calls this as it opens, so Chromium is up before the first capture.
+    warmBrowser();
+    res.writeHead(204, { "Cache-Control": "no-store" });
+    res.end();
     return;
   }
   void app.getRequestHandler()(req, res, parsed);
@@ -33,6 +40,7 @@ async function stop() {
 void app.prepare().then(() => {
   server.listen(port, hostname, () => {
     console.log(`Mockup listening on ${port}`);
+    warmDefault();
   });
 });
 
