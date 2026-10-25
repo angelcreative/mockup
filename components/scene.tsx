@@ -1810,7 +1810,7 @@ function Stage({
   const viewport = liveViewport(device, apertura, orientation);
   const span = deviceSpan(device, apertura);
   const foot = deviceFoot(device, orientation, apertura);
-  const turned = orientation === "landscape" && !isComputer(device) && device.kind !== "watch";
+  const turned = orientation === "landscape" && !isComputer(device);
   const shadowWidth = isComputer(device)
     ? Math.max(4.4, span * 0.9)
     : device.id === "iphone-duo" && isDuoOpen(apertura)

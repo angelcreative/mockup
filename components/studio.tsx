@@ -78,7 +78,6 @@ const EMPTY_DESIGNS: Record<DesignFamily, string | null> = {
   tablet: null,
   laptop: null,
   desktop: null,
-  watch: null,
 };
 
 function isDesignFile(file: File) {
@@ -87,7 +86,7 @@ function isDesignFile(file: File) {
 }
 
 /** Captured in the background after the first one, so switching device family is instant. */
-const PREFETCH = DESIGN_ROWS.filter((row) => row.id !== "watch" && row.id !== "desktop").map((row) =>
+const PREFETCH = DESIGN_ROWS.filter((row) => row.id !== "desktop").map((row) =>
   liveViewport(deviceById(row.defaultId), 0, "portrait"),
 );
 
@@ -321,7 +320,6 @@ export function Studio() {
   const toastTimer = useRef(0);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const beforeWatch = useRef<{ source: "live" | "design"; orientation: Orientation } | null>(null);
   const screenRef = useRef(screen);
   screenRef.current = screen;
   const [shellMode, setShellMode] = useState<ShellMode | null>(null);
@@ -386,7 +384,7 @@ export function Studio() {
    * shows at once; otherwise the nearest one stands in while the exact one is captured.
    */
   function showPage() {
-    if (!linkReady.current || device.kind === "watch") return;
+    if (!linkReady.current) return;
     const url = pageUrl;
     const { width, height } = viewport;
     const store = capturesRef.current;
@@ -467,7 +465,7 @@ export function Studio() {
     if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(window.history.state, "", next);
     }
-  }, [background, device, finish.id, hingeOpen, orientation, pageUrl, useCustom]);
+  }, [background, device, finish.id, hingeOpen, loadToken, orientation, pageUrl, useCustom]);
 
   const actions = useRef<{
     copyImage: () => void;
@@ -796,17 +794,6 @@ export function Studio() {
       aperturaRef.current = 0;
       setApertura(0);
     }
-    if (next.kind === "watch") {
-      if (device.kind !== "watch") {
-        beforeWatch.current = { source: screenSource, orientation };
-      }
-      setScreenSource("design");
-      setOrientation("portrait");
-    } else if (device.kind === "watch" && beforeWatch.current) {
-      setScreenSource(beforeWatch.current.source);
-      setOrientation(beforeWatch.current.orientation);
-      beforeWatch.current = null;
-    }
     setDeviceId(value);
   }
 
@@ -905,10 +892,6 @@ export function Studio() {
   function openLink(text: string) {
     const value = text.trim().split(/\s+/)[0] ?? "";
     if (!value || !isHttpUrl(value)) return false;
-    if (device.kind === "watch") {
-      showToast("Apple Watch shows designs only. Drop an image instead.");
-      return true;
-    }
     const normalized = normalizeHttpUrl(value);
     setUrl(normalized);
     presentUrl(normalized);
@@ -924,7 +907,7 @@ export function Studio() {
     const link = readLink(window.location.search);
     const next = deviceById(link.device ?? LINK_DEFAULTS.device);
     const open = hasHinge(next) ? (link.open ?? defaultOpen(next)) : false;
-    const turn = next.kind === "watch" || next.kind === "laptop" || next.kind === "desktop" ? "portrait" : (link.orientation ?? "portrait");
+    const turn = next.kind === "laptop" || next.kind === "desktop" ? "portrait" : (link.orientation ?? "portrait");
     const target = link.url ?? DEFAULT_URL;
     setDeviceId(next.id);
     deviceIdRef.current = next.id;
@@ -934,10 +917,6 @@ export function Studio() {
     setHingeOpen(open);
     aperturaRef.current = open ? 1 : 0;
     setApertura(open ? 1 : 0);
-    if (next.kind === "watch") {
-      beforeWatch.current = { source: "live", orientation: "portrait" };
-      setScreenSource("design");
-    }
     setUrl(target);
     setPageUrl(target);
     linkReady.current = true;
@@ -1200,7 +1179,6 @@ export function Studio() {
                 <p className="mb-2.5 text-[13px] text-neutral-500">{flyoutLabel}</p>
                 {flyout === "page" ? (
                   <div className="flex flex-col gap-3">
-                    {device.kind === "watch" ? null : (
                     <div
                       className="relative grid grid-cols-2 rounded-lg border border-[#ebebeb] p-0.5"
                       role="group"
@@ -1231,8 +1209,7 @@ export function Studio() {
                         </button>
                       ))}
                     </div>
-                    )}
-                    {device.kind === "watch" || screenSource === "design" ? (
+                    {screenSource === "design" ? (
                       <div>
                         <div className="flex flex-col gap-1">
                           {DESIGN_ROWS.map((row) => {
@@ -1308,7 +1285,7 @@ export function Studio() {
                     <p className="flex items-start gap-1.5 text-[12px] leading-snug text-neutral-500">
                       <Upload className="mt-px size-3.5 shrink-0" aria-hidden />
                       <span>
-                        Or drag and drop {device.kind === "watch" ? "an image" : "a link or an image"} anywhere on the page.
+                        Or drag and drop a link or an image anywhere on the page.
                         Pasting works too.
                       </span>
                     </p>
