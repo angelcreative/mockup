@@ -1,6 +1,6 @@
 # Mockup
 
-Open a site on a 3D device and browse it live. Chromium runs on the server: the device screen receives a screencast, and clicks on the glass are forwarded to that page.
+Open a site on a 3D device and scroll through it. Chromium on the server takes a full-page capture at the device's exact viewport, and the page scrolls inside the device in the browser, so any number of people can use the app at once.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 ## Use
 
 1. Paste a URL, or keep the default, and press **Open**.
-2. Choose the device. Drag off the screen to orbit. On the screen, the pointer, click, and wheel go to the page.
+2. Choose the device. Drag off the screen to orbit. On the screen, the wheel or a drag scrolls the page, with momentum and a rubber-band edge like iOS.
 3. The **View** bar at the bottom moves the camera:
    - **Rotate** (`R`) drags to orbit. **Move** (`H`) drags to slide the device across the viewport; the device itself is grabbable and the page ignores the pointer. Hold `Space` to move for a moment, or right-drag, Shift-drag, or two-finger drag in either mode.
    - **−** / **+** (`-` / `+`) zoom; the percentage returns to the framed zoom. Arrow keys nudge the device, Shift for bigger steps.
@@ -36,23 +36,20 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 
 The status bar, menu bar, Dynamic Island, notch, and home indicator are device chrome. The page lives in the safe area and does not sit under that chrome.
 
-Mac sizes, as of 10 Oct 2026, are the default Retina logical resolutions: MacBook Air 13-inch 1280×832, MacBook Air 15-inch 1440×932, MacBook Pro 14-inch 1512×982, MacBook Pro 16-inch 1728×1117, and iMac 24-inch 2240×1260. The live page starts below the menu bar.
+Mac sizes, as of 10 Oct 2026, are the default Retina logical resolutions: MacBook Air 13-inch 1280×832, MacBook Air 15-inch 1440×932, MacBook Pro 14-inch 1512×982, MacBook Pro 16-inch 1728×1117, and iMac 24-inch 2240×1260. The page starts below the menu bar.
 
-## Live session
+## Page capture
 
-`WebSocket /api/live`
+`GET /api/capture?url=…&w=…&h=…[&priority=low][&fresh=1]`
 
-The client sends `open` with the URL and the content size, `resize` when the device, opening, or orientation changes, and `input` with CSS coordinates. The server replies with status messages and JPEG frames from `Page.startScreencast`.
+Returns a full-page JPEG of the site at that viewport (only the device viewports the app uses are accepted), with `X-Capture-Width`, `X-Capture-Height`, and `X-Page-Height` in CSS pixels. Before the shot the server scrolls through the page so lazy images load, and asks for reduced motion so scroll-triggered content shows. Pages are cut at 12,000 CSS pixels or 12 megapixels, whichever comes first. Sticky headers appear once, at the top, and are not fixed while scrolling.
 
-Frames are paced so the server never runs ahead of the screen:
+- The device on screen is captured first, at its exact size. Then mobile, tablet, and laptop sizes are captured in the background (`priority=low`), so switching family is instant. Switching to another size shows the nearest capture straight away and swaps in the exact one when it arrives, keeping the scroll position.
+- One Chromium serves the whole process and takes one capture at a time; the device someone is looking at goes before background captures. Captures are cached for ten minutes (48 MB at most) and shared, so a page someone else just opened comes back at once. **Open** asks for a fresh capture (`fresh=1`).
+- Ads and analytics requests are blocked. The browser closes after two minutes without captures.
 
-- The client answers each frame with `frame` once it has drawn it, and Chromium is acknowledged only then, so one frame is on the wire and one waits. Frames come at up to ~30 fps while someone is using the page and ~6 fps while it only animates by itself.
-- The client sends `scale`, the device pixels the glass covers per CSS pixel. Frames are encoded at that size, up to the page's own pixel ratio, so a small device on screen costs less and zooming in sharpens it.
-- Pointer moves and wheel steps that queue up while Chromium is busy merge into one.
-- Ads and analytics requests are blocked.
-
-Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes. One Chromium page serves the whole process: while someone has it, a second visitor is told the live view is busy instead of taking it over. The page closes when the socket closes, after three minutes without input (keep-alives don't count), or one minute after the tab is hidden; three minutes later the browser stops.
+Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes.
 
 ## Render
 
-`render.yaml` installs Chromium during the build and starts `npm start`, the Node server that owns the WebSocket. The Starter plan has 512 MB.
+`render.yaml` installs Chromium during the build and starts `npm start`, the Node server that serves the app and `/api/capture`. The Starter plan has 512 MB.

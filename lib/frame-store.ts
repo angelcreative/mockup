@@ -1,25 +1,25 @@
+/** What the glass shows: the visible slice of the page, redrawn as it scrolls. */
+export type PageFrame = HTMLCanvasElement | ImageBitmap;
+
 /**
- * The newest screencast frame, outside React state. Frames arrive many times a second;
+ * The current page frame, outside React state. Scrolling redraws it many times a second;
  * the scene subscribes and repaints the glass without re-rendering the whole studio.
  */
 export type FrameStore = {
-  get: () => ImageBitmap | null;
-  set: (next: ImageBitmap | null) => void;
+  get: () => PageFrame | null;
+  /** Notifies even when the frame is the same canvas, since its pixels have changed. */
+  set: (next: PageFrame | null) => void;
   subscribe: (listener: () => void) => () => void;
 };
 
 export function createFrameStore(): FrameStore {
-  let current: ImageBitmap | null = null;
+  let current: PageFrame | null = null;
   const listeners = new Set<() => void>();
   return {
     get: () => current,
     set(next) {
-      if (current === next) return;
-      const stale = current;
       current = next;
       listeners.forEach((listener) => listener());
-      // The GPU may still be reading the old bitmap for the frame being drawn.
-      if (stale) requestAnimationFrame(() => requestAnimationFrame(() => stale.close()));
     },
     subscribe(listener) {
       listeners.add(listener);

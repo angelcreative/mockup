@@ -6,15 +6,16 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BackgroundId, DeviceSpec, FinishSpec, Orientation, ScreenState } from "@/lib/devices";
-import { BACKGROUNDS, duoScreen, glassSize, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
+import { BACKGROUNDS, duoScreen, isComputer, isDuoOpen, liveViewport } from "@/lib/devices";
 import { DeviceModel, deviceFoot, deviceScreenSize, deviceSpan } from "@/components/devices";
 import { paintDesign, paintScreen } from "@/components/chrome";
 import type { FrameStore } from "@/lib/frame-store";
 import { uvToCss, type ScreenPanel } from "@/lib/pointer";
 
+/** `drag` marks scroll steps from a finger or mouse dragging the glass; `release` ends that drag. */
 export type ScreenInput =
-  | { action: "move" | "down" | "up"; x: number; y: number; button: number }
-  | { action: "wheel"; x: number; y: number; button: number; deltaX: number; deltaY: number };
+  | { action: "move" | "down" | "up" | "release"; x: number; y: number; button: number }
+  | { action: "wheel"; x: number; y: number; button: number; deltaX: number; deltaY: number; drag?: boolean };
 
 export type ShotMode = "png" | "transparent" | "square" | "story";
 
@@ -1135,28 +1136,31 @@ function ScreenPointer({
       };
     }
 
+    function flushWheel() {
+      wheelFrame = 0;
+      const deltaX = wheelX;
+      const deltaY = wheelY;
+      wheelX = 0;
+      wheelY = 0;
+      if (Math.abs(deltaX) < 0.2 && Math.abs(deltaY) < 0.2) return;
+      onInputRef.current({
+        action: "wheel",
+        x: wheelCssX,
+        y: wheelCssY,
+        button: 0,
+        deltaX,
+        deltaY,
+        drag: true,
+      });
+    }
+
     function queueWheel(x: number, y: number, deltaX: number, deltaY: number) {
       wheelCssX = x;
       wheelCssY = y;
       wheelX += deltaX;
       wheelY += deltaY;
       if (wheelFrame) return;
-      wheelFrame = requestAnimationFrame(() => {
-        wheelFrame = 0;
-        const deltaX = wheelX;
-        const deltaY = wheelY;
-        wheelX = 0;
-        wheelY = 0;
-        if (Math.abs(deltaX) < 0.2 && Math.abs(deltaY) < 0.2) return;
-        onInputRef.current({
-          action: "wheel",
-          x: wheelCssX,
-          y: wheelCssY,
-          button: 0,
-          deltaX,
-          deltaY,
-        });
-      });
+      wheelFrame = requestAnimationFrame(flushWheel);
     }
 
     function endDrag(event: PointerEvent) {
@@ -1165,6 +1169,12 @@ function ScreenPointer({
       if (!drag.moved) {
         onInputRef.current({ action: "down", x: drag.cssX, y: drag.cssY, button: 0 });
         onInputRef.current({ action: "up", x: drag.cssX, y: drag.cssY, button: 0 });
+      } else {
+        if (wheelFrame) {
+          cancelAnimationFrame(wheelFrame);
+          flushWheel();
+        }
+        onInputRef.current({ action: "release", x: drag.cssX, y: drag.cssY, button: 0 });
       }
       drag = null;
       if (dom.hasPointerCapture(event.pointerId)) dom.releasePointerCapture(event.pointerId);
@@ -1695,48 +1705,6 @@ function ViewRig({
   return null;
 }
 
-/**
- * How many device pixels the glass covers on this screen, per CSS pixel of the page. The
- * server encodes frames at that size instead of the page's full resolution.
- */
-function ScaleProbe({
-  device,
-  apertura,
-  orientation,
-  onScale,
-}: {
-  device: DeviceSpec;
-  apertura: number;
-  orientation: Orientation;
-  onScale: (scale: number) => void;
-}) {
-  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
-  const height = useThree((state) => state.size.height);
-  const last = useRef(0);
-  const onScaleRef = useRef(onScale);
-
-  useEffect(() => {
-    onScaleRef.current = onScale;
-  });
-
-  useFrame(() => {
-    const world = deviceScreenSize(device, orientation, apertura);
-    const css = glassSize(device, apertura);
-    const distance = camera.position.length();
-    if (distance <= 0 || height <= 0) return;
-    const visible = 2 * distance * Math.tan((camera.fov * Math.PI) / 360);
-    const pixels = height * Math.min(window.devicePixelRatio || 1, 2);
-    const covered = (Math.max(world.width, world.height) / visible) * pixels;
-    // A little headroom, rounded up to quarter steps so small camera moves change nothing.
-    const scale = Math.min(3, Math.max(0.5, Math.ceil(((covered / Math.max(css.width, css.height)) * 1.1) * 4) / 4));
-    if (scale === last.current) return;
-    last.current = scale;
-    onScaleRef.current(scale);
-  });
-
-  return null;
-}
-
 /** Drops to 1× pixel ratio while someone drags the scene and restores it when they stop. */
 function AdaptiveDpr() {
   const gl = useThree((state) => state.gl);
@@ -1798,7 +1766,6 @@ function Stage({
   designPending,
   tool,
   viewRef,
-  onScale,
   recordFormat,
   recorderRef,
 }: {
@@ -1824,7 +1791,6 @@ function Stage({
   designPending: boolean;
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
-  onScale: (scale: number) => void;
   recordFormat: RecordFormat | null;
   recorderRef: MutableRefObject<Recorder | null>;
 }) {
@@ -1894,7 +1860,6 @@ function Stage({
         maxAzimuthAngle={Infinity}
       />
       <ViewRig span={span} viewRef={viewRef} />
-      <ScaleProbe device={device} apertura={apertura} orientation={orientation} onScale={onScale} />
       <AdaptiveDpr />
       {recordFormat ? <SceneRecorder format={recordFormat} recorderRef={recorderRef} /> : null}
       <Turntable enabled={autoRotate && !cinematic} />
@@ -1939,7 +1904,6 @@ export default function Scene({
   designPending,
   tool,
   viewRef,
-  onScale,
   recordFormat,
   recorderRef,
 }: {
@@ -1965,7 +1929,6 @@ export default function Scene({
   designPending: boolean;
   tool: ViewTool;
   viewRef: MutableRefObject<ViewApi | null>;
-  onScale: (scale: number) => void;
   recordFormat: RecordFormat | null;
   recorderRef: MutableRefObject<Recorder | null>;
 }) {
@@ -2010,7 +1973,6 @@ export default function Scene({
           designPending={designPending}
           tool={tool}
           viewRef={viewRef}
-          onScale={onScale}
           recordFormat={recordFormat}
           recorderRef={recorderRef}
         />

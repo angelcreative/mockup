@@ -59,7 +59,8 @@ import {
 } from "@/lib/devices";
 import { createFrameStore } from "@/lib/frame-store";
 import { defaultOpen, hasHinge, isHttpUrl, LINK_DEFAULTS, readLink, writeLink } from "@/lib/link";
-import type { LiveServerMessage } from "@/lib/live-protocol";
+import { CaptureFailed, captureKey, fetchCapture, type PageCapture } from "@/lib/page-capture";
+import { PageScroller } from "@/lib/page-scroller";
 import { normalizeHttpUrl } from "@/lib/url";
 
 const Scene = dynamic(() => import("@/components/scene"), {
@@ -85,10 +86,23 @@ function isDesignFile(file: File) {
   return /\.(png|jpe?g|webp)$/i.test(file.name);
 }
 
-/** The server scales frames to what the screen can show, so only the shape is fixed. */
-function bitmapFitsViewport(bitmap: ImageBitmap, width: number, height: number) {
-  if (bitmap.width > width * 2 + 4 || bitmap.height > height * 2 + 4) return false;
-  return Math.abs(bitmap.width / bitmap.height - width / height) < 0.02;
+/** Captured in the background after the first one, so switching device family is instant. */
+const PREFETCH = DESIGN_ROWS.filter((row) => row.id !== "watch" && row.id !== "desktop").map((row) =>
+  liveViewport(deviceById(row.defaultId), 0, "portrait"),
+);
+
+/** The cached capture closest in size, shown while the exact one is on its way. */
+function nearestCapture(captures: Iterable<PageCapture>, width: number, height: number) {
+  let best: PageCapture | null = null;
+  let bestScore = Infinity;
+  for (const capture of captures) {
+    const score = Math.abs(Math.log(capture.width / width)) * 4 + Math.abs(Math.log(capture.viewportHeight / height));
+    if (score < bestScore) {
+      best = capture;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 const DEFAULT_URL = LINK_DEFAULTS.url;
@@ -257,11 +271,6 @@ function canRecordVideo() {
   return ["video/mp4", "video/webm"].some((type) => MediaRecorder.isTypeSupported(type));
 }
 
-function socketUrl() {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/live`;
-}
-
 export function Studio() {
   const [url, setUrl] = useState(DEFAULT_URL);
   const [deviceId, setDeviceId] = useState<DeviceId>("iphone-14");
@@ -299,8 +308,12 @@ export function Studio() {
     message: "Opening…",
   });
   const frames = useState(createFrameStore)[0];
-  const scaleRef = useRef(0);
-  const scaleTimer = useRef(0);
+  const scrollerRef = useRef<PageScroller | null>(null);
+  const capturesRef = useRef(new Map<string, PageCapture>());
+  const requestRef = useRef(0);
+  const freshRef = useRef(false);
+  const prefetchedRef = useRef("");
+  const [loadToken, setLoadToken] = useState(0);
   const exportRef = useRef<TakeShot | null>(null);
   const [pageUrl, setPageUrl] = useState(DEFAULT_URL);
   const linkReady = useRef(false);
@@ -308,15 +321,9 @@ export function Studio() {
   const toastTimer = useRef(0);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-  const openedRef = useRef("");
-  const pageUrlRef = useRef(DEFAULT_URL);
   const beforeWatch = useRef<{ source: "live" | "design"; orientation: Orientation } | null>(null);
   const screenRef = useRef(screen);
-  const pausedRef = useRef(false);
-  const quietRef = useRef(false);
   screenRef.current = screen;
-  const sentSize = useRef("");
   const [shellMode, setShellMode] = useState<ShellMode | null>(null);
   const [stageWidth, setStageWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
   const [flyout, setFlyout] = useState<GroupId | null>(null);
@@ -336,20 +343,7 @@ export function Studio() {
   const device = deviceById(deviceId);
   const finish = device.finishes.find((item) => item.id === finishId) ?? device.finishes[0];
   const viewport = liveViewport(device, apertura, orientation);
-  const viewportKey = `${viewport.width}x${viewport.height}`;
-  const [shownViewport, setShownViewport] = useState(viewportKey);
-  const awaitingViewport = useRef<{ width: number; height: number } | null>(null);
   const opening = screen.status === "loading" && screen.message === "Opening…";
-  if (shownViewport !== viewportKey && device.kind !== "watch") {
-    setShownViewport(viewportKey);
-    awaitingViewport.current = { width: viewport.width, height: viewport.height };
-    rememberFrame(null);
-    setScreen((current) => {
-      if (current.status === "empty" || current.status === "error" || current.status === "paused") return current;
-      if (current.message === "Opening…") return { status: "loading", message: "Opening…" };
-      return { status: "loading", message: "" };
-    });
-  }
   const handheld = device.kind === "phone" || device.kind === "tablet" || device.kind === "duo";
 
   function setHinge(open: boolean) {
@@ -376,54 +370,87 @@ export function Studio() {
     foldRef.current = requestAnimationFrame(tick);
   }
 
-  function rememberFrame(next: ImageBitmap | null) {
-    frames.set(next);
+  function scroller() {
+    scrollerRef.current ??= new PageScroller((canvas) => frames.set(canvas));
+    return scrollerRef.current;
   }
 
-  function sendScale(value: number) {
-    scaleRef.current = value;
-    window.clearTimeout(scaleTimer.current);
-    // Zooming passes through many sizes; tell the server once it settles.
-    scaleTimer.current = window.setTimeout(() => {
-      const socket = socketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "scale", value }));
+  function markReady() {
+    setScreen((current) =>
+      current.status === "ready" && current.message === "" ? current : { status: "ready", message: "" },
+    );
+  }
+
+  /**
+   * Puts the page on the glass at the device's exact size. A cached capture of that size
+   * shows at once; otherwise the nearest one stands in while the exact one is captured.
+   */
+  function showPage() {
+    if (!linkReady.current || device.kind === "watch") return;
+    const url = pageUrl;
+    const { width, height } = viewport;
+    const store = capturesRef.current;
+    const fresh = freshRef.current;
+    freshRef.current = false;
+    for (const [key, capture] of store) {
+      if (fresh || capture.url !== url) store.delete(key);
+    }
+    if (scroller().current && scroller().current?.url !== url) scroller().clear();
+    const key = captureKey(url, width, height);
+    const request = ++requestRef.current;
+    const exact = store.get(key);
+    if (exact) {
+      void scroller().show(exact, width, height).then((shown) => shown && markReady());
+      return;
+    }
+    const near = nearestCapture(store.values(), width, height);
+    if (near) {
+      void scroller().show(near, width, height).then((shown) => shown && markReady());
+    } else {
+      scroller().clear();
+      setScreen({ status: "loading", message: "Opening…" });
+    }
+    fetchCapture(url, width, height, { urgent: true, fresh })
+      .then(async (capture) => {
+        store.set(key, capture);
+        if (request !== requestRef.current) return;
+        if (await scroller().show(capture, width, height)) markReady();
+        void prefetch(url);
+      })
+      .catch((error: unknown) => {
+        if (request !== requestRef.current) return;
+        const message = error instanceof CaptureFailed ? error.message : "Could not open this page";
+        if (near) showToast(message);
+        else setScreen({ status: "error", message });
+      });
+  }
+
+  /** One after another, so the server's queue keeps serving whoever is waiting in front. */
+  async function prefetch(url: string) {
+    if (prefetchedRef.current === url) return;
+    prefetchedRef.current = url;
+    for (const size of PREFETCH) {
+      const key = captureKey(url, size.width, size.height);
+      // A capture within a few pixels already covers this family until its exact size is asked for.
+      const near = nearestCapture(capturesRef.current.values(), size.width, size.height);
+      if (near && Math.abs(near.width - size.width) <= size.width * 0.05) continue;
+      try {
+        const capture = await fetchCapture(url, size.width, size.height, { urgent: false });
+        if (prefetchedRef.current !== url) return;
+        capturesRef.current.set(key, capture);
+      } catch {
+        // A missing prefetch only means that family captures on demand.
       }
-    }, 400);
-  }
-
-  function closeSocket() {
-    const socket = socketRef.current;
-    socketRef.current = null;
-    openedRef.current = "";
-    sentSize.current = "";
-    socket?.close();
+    }
   }
 
   useEffect(() => () => cancelAnimationFrame(foldRef.current), []);
 
   useEffect(() => {
-    const syncStream = () => {
-      const socket = socketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: document.hidden ? "pause" : "resume" }));
-    };
-    document.addEventListener("visibilitychange", syncStream);
-    return () => document.removeEventListener("visibilitychange", syncStream);
-  }, []);
-
-  useEffect(() => {
-    const ping = window.setInterval(() => {
-      const socket = socketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 45_000);
-    return () => {
-      window.clearInterval(ping);
-      socketRef.current?.close();
-    };
-  }, []);
+    showPage();
+    // showPage reads the page, the viewport and the device; these are what change them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageUrl, loadToken, viewport.width, viewport.height, device.kind]);
 
   useEffect(() => {
     if (!linkReady.current) return;
@@ -564,16 +591,6 @@ export function Studio() {
   }, [apertura, deviceId, orientation]);
 
   useEffect(() => {
-    if (device.kind === "watch") return;
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
-    const key = `${viewport.width}x${viewport.height}`;
-    if (sentSize.current === key) return;
-    sentSize.current = key;
-    socket.send(JSON.stringify({ type: "resize", width: viewport.width, height: viewport.height }));
-  }, [device.kind, viewport.width, viewport.height]);
-
-  useEffect(() => {
     setShellMode(readShellMode());
   }, []);
 
@@ -688,119 +705,20 @@ export function Studio() {
     setScreenSource("design");
   }
 
+  /** Scrolling on the glass moves the captured page; a tap on an error tries again. */
   function sendInput(input: ScreenInput) {
     if (screenSource === "design") return;
-    const current = screenRef.current;
-    if (current.status === "paused" || current.status === "error") {
+    if (screenRef.current.status === "error") {
       if (input.action === "up") openAgain();
       return;
     }
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !openedRef.current) return;
-    socket.send(JSON.stringify({ type: "input", ...input }));
-  }
-
-  function attachSocket(target: string, width: number, height: number) {
-    closeSocket();
-    const socket = new WebSocket(socketUrl());
-    socket.binaryType = "arraybuffer";
-    socketRef.current = socket;
-    const key = `${width}x${height}`;
-
-    socket.onopen = () => {
-      if (socketRef.current !== socket) return;
-      openedRef.current = target;
-      sentSize.current = key;
-      if (scaleRef.current > 0) socket.send(JSON.stringify({ type: "scale", value: scaleRef.current }));
-      socket.send(JSON.stringify({ type: "open", url: target, width, height }));
-      if (document.hidden) socket.send(JSON.stringify({ type: "pause" }));
-    };
-
-    socket.onmessage = (event) => {
-      if (socketRef.current !== socket) return;
-      if (typeof event.data === "string") {
-        let message: LiveServerMessage;
-        try {
-          message = JSON.parse(event.data) as LiveServerMessage;
-        } catch {
-          return;
-        }
-        if (message.type === "error") {
-          quietRef.current = true;
-          setScreen({ status: "error", message: message.message });
-        } else if (message.type === "idle") {
-          pausedRef.current = true;
-          quietRef.current = true;
-          setScreen({
-            status: "paused",
-            message: "Session paused",
-            detail: "It closed after a while with no one using it.",
-          });
-        } else if (message.type === "status" && message.state === "loading") {
-          setScreen({ status: "loading", message: "Opening…" });
-        }
-        return;
-      }
-      // The server sends the next frame only after this one is confirmed, so confirm
-      // every frame, drawn or dropped, once the browser is ready for another.
-      const confirm = () => {
-        if (socketRef.current === socket && socket.readyState === WebSocket.OPEN) {
-          socket.send('{"type":"frame"}');
-        }
-      };
-      if (document.hidden) {
-        confirm();
-        return;
-      }
-      const bytes = event.data as ArrayBuffer;
-      createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
-        .then((bitmap) => {
-          if (bitmap.width < 1 || bitmap.height < 1) {
-            bitmap.close();
-            confirm();
-            return;
-          }
-          if (socketRef.current !== socket || quietRef.current) {
-            bitmap.close();
-            confirm();
-            return;
-          }
-          const expected = awaitingViewport.current;
-          if (expected && !bitmapFitsViewport(bitmap, expected.width, expected.height)) {
-            bitmap.close();
-            confirm();
-            return;
-          }
-          awaitingViewport.current = null;
-          rememberFrame(bitmap);
-          requestAnimationFrame(confirm);
-          setScreen((current) =>
-            current.status === "ready" && current.message === "" ? current : { status: "ready", message: "" },
-          );
-        })
-        .catch(confirm);
-    };
-
-    socket.onclose = () => {
-      if (socketRef.current !== socket) return;
-      socketRef.current = null;
-      openedRef.current = "";
-      if (pausedRef.current) return;
-      setScreen((current) =>
-        current.status === "paused"
-          ? current
-          : current.status === "ready" || current.status === "loading"
-            ? { status: "error", message: "The session closed" }
-            : current,
-      );
-    };
+    if (input.action === "wheel") scroller().scrollBy(input.deltaY, Boolean(input.drag));
+    else if (input.action === "release") scroller().release();
   }
 
   function presentUrl(nextUrl: string) {
     const normalized = normalizeHttpUrl(nextUrl);
     if (!normalized) {
-      pausedRef.current = false;
-      quietRef.current = true;
       setScreen({ ...EMPTY_SCREEN });
       return;
     }
@@ -808,8 +726,6 @@ export function Studio() {
     try {
       const parsed = new URL(normalized);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        pausedRef.current = false;
-        quietRef.current = true;
         setScreen({
           status: "error",
           message: "Only http or https addresses are allowed",
@@ -817,25 +733,21 @@ export function Studio() {
         return;
       }
     } catch {
-      pausedRef.current = false;
-      quietRef.current = true;
       setScreen({ status: "error", message: "Invalid URL" });
       return;
     }
 
-    pausedRef.current = false;
-    quietRef.current = false;
-    pageUrlRef.current = normalized;
+    // Opening a page on purpose takes a new capture rather than one from a few minutes ago.
+    freshRef.current = true;
+    prefetchedRef.current = "";
     setPageUrl(normalized);
-    rememberFrame(null);
+    setLoadToken((token) => token + 1);
     setScreenSource("live");
-    setScreen({ status: "loading", message: "Opening…" });
-    attachSocket(normalized, viewport.width, viewport.height);
   }
 
   function openAgain() {
     if (screenRef.current.status === "loading") return;
-    presentUrl(pageUrlRef.current);
+    presentUrl(pageUrl);
   }
 
   function openPage(event: FormEvent) {
@@ -1028,11 +940,8 @@ export function Studio() {
     }
     setUrl(target);
     setPageUrl(target);
-    pageUrlRef.current = target;
     linkReady.current = true;
-    // The watch has no live page; keep the session ready for the next device.
-    const size = next.kind === "watch" ? liveViewport(deviceById(LINK_DEFAULTS.device), 0, "portrait") : liveViewport(next, open ? 1 : 0, turn);
-    attachSocket(target, size.width, size.height);
+    setLoadToken((token) => token + 1);
   }
 
   useEffect(() => {
@@ -1040,7 +949,6 @@ export function Studio() {
     // browser, so it is applied after the first render instead of during it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     bootFromLink();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useLayoutEffect(() => {
@@ -1062,7 +970,6 @@ export function Studio() {
           device={device}
           screen={screen}
           frames={frames}
-          onScale={sendScale}
           recordFormat={recording ? recordFormat : null}
           recorderRef={recorderRef}
           apertura={apertura}
