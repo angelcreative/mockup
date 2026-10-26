@@ -1,8 +1,8 @@
-/** What the glass shows: the visible slice of the page, redrawn as it scrolls. */
+/** What the glass shows: the captured screen, redrawn while one capture fades into the next. */
 export type PageFrame = HTMLCanvasElement | ImageBitmap;
 
 /**
- * The current page frame, outside React state. Scrolling redraws it many times a second;
+ * The current page frame, outside React state. A fade redraws it many times a second;
  * the scene subscribes and repaints the glass without re-rendering the whole studio.
  */
 export type FrameStore = {
