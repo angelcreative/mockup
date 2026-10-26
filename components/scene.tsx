@@ -175,9 +175,11 @@ function useDeviceTexture(
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const frame = frameRef.current;
     const showing = Boolean(frame && frame.width >= 1 && frame.height >= 1);
-    if (!sourceKeyRef.current) {
-      sourceKeyRef.current = sourceKey;
-    } else if (sourceKeyRef.current !== sourceKey) {
+    // A page captured before the scene mounted is already here on the first pass, so the first
+    // pass falls through to the fade-in like any later frame.
+    const first = !sourceKeyRef.current;
+    if (first) sourceKeyRef.current = sourceKey;
+    if (!first && sourceKeyRef.current !== sourceKey) {
       sourceKeyRef.current = sourceKey;
       const waiting = sourceKey === "loading" || (sourceKey === "live" && !showing);
       if (waiting) {
