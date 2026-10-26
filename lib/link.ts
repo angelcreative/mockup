@@ -17,8 +17,6 @@ export type LinkState = {
   background?: BackgroundId;
   orientation?: Orientation;
   open?: boolean;
-  /** Where in the page the screen shows, 0 the top to 1 the bottom. */
-  position?: number;
 };
 
 export const LINK_DEFAULTS = { url: "https://www.apple.com", device: "iphone-14" as DeviceId };
@@ -58,8 +56,6 @@ export function readLink(search: string): LinkState {
   if (orientation === "portrait" || orientation === "landscape") state.orientation = orientation;
   const open = params.get("open");
   if (open === "1" || open === "0") state.open = open === "1";
-  const at = Number(params.get("at"));
-  if (params.has("at") && Number.isFinite(at)) state.position = Math.round(Math.min(1, Math.max(0, at)) * 20) / 20;
   return state;
 }
 
@@ -71,7 +67,6 @@ export function writeLink(state: {
   background: BackgroundId | null;
   orientation: Orientation;
   open: boolean;
-  position: number;
 }) {
   const params = new URLSearchParams();
   if (state.url !== LINK_DEFAULTS.url) params.set("url", state.url);
@@ -80,7 +75,6 @@ export function writeLink(state: {
   if (state.background && state.background !== "blanco") params.set("bg", state.background);
   if (state.orientation !== "portrait") params.set("orientation", state.orientation);
   if (hasHinge(state.device) && state.open !== defaultOpen(state.device)) params.set("open", state.open ? "1" : "0");
-  if (state.position > 0) params.set("at", String(state.position));
   const query = params.toString();
   return query ? `?${query}` : "";
 }

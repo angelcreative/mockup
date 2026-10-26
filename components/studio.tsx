@@ -63,12 +63,11 @@ import {
   CaptureFailed,
   captureKey,
   fetchCapture,
-  snapPosition,
   warmCapture,
   warmServer,
   type PageCapture,
 } from "@/lib/page-capture";
-import { PageView } from "@/lib/page-view";
+import { PageScroller } from "@/lib/page-scroller";
 import { normalizeHttpUrl } from "@/lib/url";
 
 const Scene = dynamic(() => import("@/components/scene"), {
@@ -106,26 +105,13 @@ const SLOW_NOTES = [
 /** A stand-in from another layout (a desktop page on a phone) looks broken, so it must be this close. */
 const STAND_IN_RATIO = 1.45;
 
-/** Quick picks for where in the page the screen shows. */
-const POSITIONS = [
-  { label: "Top", value: 0 },
-  { label: "Middle", value: 0.5 },
-  { label: "Bottom", value: 1 },
-];
-
-/**
- * The cached capture closest to what is asked, shown while the exact one is on its way: the same
- * spot of the page first, then the nearest size.
- */
-function nearestCapture(captures: Iterable<PageCapture>, width: number, height: number, position: number) {
+/** The cached capture closest in size, shown while the exact one is on its way. */
+function nearestCapture(captures: Iterable<PageCapture>, width: number, height: number) {
   let best: PageCapture | null = null;
   let bestScore = Infinity;
   for (const capture of captures) {
     if (Math.max(capture.width / width, width / capture.width) > STAND_IN_RATIO) continue;
-    const score =
-      Math.abs(Math.log(capture.width / width)) * 4 +
-      Math.abs(Math.log(capture.height / height)) +
-      Math.abs(capture.position - position) * 6;
+    const score = Math.abs(Math.log(capture.width / width)) * 4 + Math.abs(Math.log(capture.viewportHeight / height));
     if (score < bestScore) {
       best = capture;
       bestScore = score;
@@ -337,12 +323,7 @@ export function Studio() {
     message: "Opening…",
   });
   const frames = useState(createFrameStore)[0];
-  const pageViewRef = useRef<PageView | null>(null);
-  /** Where in the page the screen shows (0 top, 1 bottom); `positionDraft` follows the slider while dragged. */
-  const [position, setPosition] = useState(0);
-  const [positionDraft, setPositionDraft] = useState<number | null>(null);
-  /** A new spot of the same page is being captured while the last one stays on screen. */
-  const [updating, setUpdating] = useState(false);
+  const scrollerRef = useRef<PageScroller | null>(null);
   const capturesRef = useRef(new Map<string, PageCapture>());
   const requestRef = useRef(0);
   const freshRef = useRef(false);
@@ -404,9 +385,9 @@ export function Studio() {
     foldRef.current = requestAnimationFrame(tick);
   }
 
-  function pageView() {
-    pageViewRef.current ??= new PageView((canvas) => frames.set(canvas));
-    return pageViewRef.current;
+  function scroller() {
+    scrollerRef.current ??= new PageScroller((canvas) => frames.set(canvas));
+    return scrollerRef.current;
   }
 
   function markReady() {
@@ -416,8 +397,8 @@ export function Studio() {
   }
 
   /**
-   * Puts the page on the glass at the device's exact size and the chosen position. A cached
-   * capture shows at once; otherwise the nearest one stands in while the exact one is taken.
+   * Puts the page on the glass at the device's exact size. A cached capture of that size
+   * shows at once; otherwise the nearest one stands in while the exact one is captured.
    */
   function showPage() {
     if (!linkReady.current) return;
@@ -429,53 +410,60 @@ export function Studio() {
     for (const [key, capture] of store) {
       if (fresh || capture.url !== url) store.delete(key);
     }
-    if (pageView().current && pageView().current?.url !== url) pageView().clear();
-    const key = captureKey(url, width, height, position);
+    if (scroller().current && scroller().current?.url !== url) scroller().clear();
+    const key = captureKey(url, width, height);
     const request = ++requestRef.current;
     const exact = store.get(key);
-    setUpdating(false);
     if (exact) {
-      void pageView().show(exact, width, height).then((shown) => shown && markReady());
+      void scroller().show(exact, width, height).then((shown) => shown && markReady());
       return;
     }
-    const near = nearestCapture(store.values(), width, height, position);
-    setUpdating(Boolean(near));
+    const near = nearestCapture(store.values(), width, height);
     if (near) {
-      void pageView().show(near, width, height).then((shown) => shown && markReady());
+      void scroller().show(near, width, height).then((shown) => shown && markReady());
     } else {
-      pageView().clear();
+      scroller().clear();
       setScreen({ status: "loading", message: "Opening…" });
     }
-    fetchCapture(url, width, height, { position, urgent: true, fresh })
+    // The first screen comes back in about a second; the full page follows and takes its place.
+    let full: PageCapture | null = null;
+    if (!near) {
+      fetchCapture(url, width, height, { urgent: true, fresh, part: "top" })
+        .then(async (top) => {
+          if (full || request !== requestRef.current) return;
+          if (!top.partial) store.set(key, top);
+          if ((await scroller().show(top, width, height)) && !full) markReady();
+        })
+        .catch(() => undefined);
+    }
+    fetchCapture(url, width, height, { urgent: true, fresh })
       .then(async (capture) => {
+        full = capture;
         store.set(key, capture);
         if (request !== requestRef.current) return;
-        setUpdating(false);
-        if (await pageView().show(capture, width, height)) markReady();
-        void prefetch(url, position);
+        if (await scroller().show(capture, width, height)) markReady();
+        void prefetch(url);
       })
       .catch((error: unknown) => {
         if (request !== requestRef.current) return;
-        setUpdating(false);
         const message = error instanceof CaptureFailed ? error.message : "Could not open this page.";
-        if (near) showToast(message);
+        if (near || scroller().current?.url === url) showToast(message);
         else setScreen({ status: "error", message });
       });
   }
 
   /** One after another, so the server's queue keeps serving whoever is waiting in front. */
-  async function prefetch(url: string, at: number) {
-    const mark = `${url}|${at}`;
-    if (prefetchedRef.current === mark) return;
-    prefetchedRef.current = mark;
+  async function prefetch(url: string) {
+    if (prefetchedRef.current === url) return;
+    prefetchedRef.current = url;
     for (const size of PREFETCH) {
-      const key = captureKey(url, size.width, size.height, at);
+      const key = captureKey(url, size.width, size.height);
       // A capture within a few pixels already covers this family until its exact size is asked for.
-      const near = nearestCapture(capturesRef.current.values(), size.width, size.height, at);
-      if (near && near.position === at && Math.abs(near.width - size.width) <= size.width * 0.05) continue;
+      const near = nearestCapture(capturesRef.current.values(), size.width, size.height);
+      if (near && Math.abs(near.width - size.width) <= size.width * 0.05) continue;
       try {
-        const capture = await fetchCapture(url, size.width, size.height, { position: at, urgent: false });
-        if (prefetchedRef.current !== mark) return;
+        const capture = await fetchCapture(url, size.width, size.height, { urgent: false });
+        if (prefetchedRef.current !== url) return;
         capturesRef.current.set(key, capture);
       } catch {
         // A missing prefetch only means that family captures on demand.
@@ -489,7 +477,7 @@ export function Studio() {
     showPage();
     // showPage reads the page, the viewport and the device; these are what change them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageUrl, loadToken, position, viewport.width, viewport.height, device.kind]);
+  }, [pageUrl, loadToken, viewport.width, viewport.height, device.kind]);
 
   const waiting = screen.status === "loading";
   useEffect(() => {
@@ -514,13 +502,12 @@ export function Studio() {
       background: useCustom ? null : background,
       orientation,
       open: hingeOpen,
-      position,
     });
     const next = `${window.location.pathname}${query}${window.location.hash}`;
     if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(window.history.state, "", next);
     }
-  }, [background, device, finish.id, hingeOpen, loadToken, orientation, pageUrl, position, useCustom]);
+  }, [background, device, finish.id, hingeOpen, loadToken, orientation, pageUrl, useCustom]);
 
   const actions = useRef<{
     copyImage: () => void;
@@ -758,10 +745,15 @@ export function Studio() {
     setScreenSource("design");
   }
 
-  /** The glass only listens while it shows an error: a tap tries again. */
+  /** Scrolling on the glass moves the captured page; a tap on an error tries again. */
   function sendInput(input: ScreenInput) {
     if (screenSource === "design") return;
-    if (screenRef.current.status === "error" && input.action === "up") openAgain();
+    if (screenRef.current.status === "error") {
+      if (input.action === "up") openAgain();
+      return;
+    }
+    if (input.action === "wheel") scroller().scrollBy(input.deltaY, Boolean(input.drag));
+    else if (input.action === "release") scroller().release();
   }
 
   function presentUrl(nextUrl: string) {
@@ -788,8 +780,6 @@ export function Studio() {
     // Opening the page already on screen again asks for a new capture; a new address may use
     // one the server already holds, e.g. from warming it while it was typed.
     freshRef.current = normalized === pageUrl;
-    // A new page opens at its top; reopening the same one keeps the chosen spot.
-    if (normalized !== pageUrl) setPosition(0);
     prefetchedRef.current = "";
     setPageUrl(normalized);
     setLoadToken((token) => token + 1);
@@ -963,8 +953,7 @@ export function Studio() {
     if (!isHttpUrl(value)) return;
     const normalized = normalizeHttpUrl(value.trim());
     if (normalized === pageUrl) return;
-    // A new address opens at the top, so that is the screen worth warming.
-    warmTimer.current = window.setTimeout(() => warmCapture(normalized, viewport.width, viewport.height, 0), 600);
+    warmTimer.current = window.setTimeout(() => warmCapture(normalized, viewport.width, viewport.height), 600);
   }
 
   function bootFromLink() {
@@ -984,7 +973,6 @@ export function Studio() {
     setApertura(open ? 1 : 0);
     setUrl(target);
     setPageUrl(target);
-    setPosition(link.position ?? 0);
     linkReady.current = true;
     setLoadToken((token) => token + 1);
   }
@@ -1040,7 +1028,6 @@ export function Studio() {
             screenSource === "design" && Boolean(designUrl) && !designReady && designFailed !== designUrl
           }
           tool={holdingMove ? "move" : viewTool}
-          glassActive={screenSource === "live" && screen.status === "error"}
           viewRef={viewRef}
         />
       </div>
@@ -1332,7 +1319,6 @@ export function Studio() {
                         {designError ? <p className="mt-2 text-[12px] text-neutral-500">{designError}</p> : null}
                       </div>
                     ) : (
-                      <>
                       <form onSubmit={openPage} className="flex items-center gap-2">
                         <Input
                           value={url}
@@ -1349,46 +1335,6 @@ export function Studio() {
                           {opening ? "Opening…" : "Open"}
                         </Button>
                       </form>
-                      <div className="flex flex-col gap-2">
-                        <span className="flex items-center justify-between text-[13px]">
-                          <span className="text-neutral-500">Position on page</span>
-                          <span className="text-neutral-950 tabular-nums">
-                            {updating ? "Updating…" : `${Math.round((positionDraft ?? position) * 100)}%`}
-                          </span>
-                        </span>
-                        <div className="grid grid-cols-3 rounded-lg border border-[#ebebeb] p-0.5" role="group" aria-label="Position on page">
-                          {POSITIONS.map((item) => (
-                            <button
-                              key={item.label}
-                              type="button"
-                              aria-pressed={position === item.value}
-                              onClick={() => setPosition(item.value)}
-                              className={`h-7 rounded-md text-[12px] transition-colors outline-none ${QUIET} focus-visible:ring-2 focus-visible:ring-neutral-400 ${
-                                position === item.value ? "bg-neutral-950 text-white" : "text-neutral-950 hover:bg-neutral-50"
-                              }`}
-                            >
-                              {item.label}
-                            </button>
-                          ))}
-                        </div>
-                        <Slider
-                          value={[(positionDraft ?? position) * 100]}
-                          min={0}
-                          max={100}
-                          step={5}
-                          onValueChange={(value) => {
-                            const next = Array.isArray(value) ? value[0] : value;
-                            setPositionDraft(next / 100);
-                          }}
-                          onValueCommitted={(value) => {
-                            const next = Array.isArray(value) ? value[0] : value;
-                            setPositionDraft(null);
-                            setPosition(snapPosition(next / 100));
-                          }}
-                          aria-label="Position on page"
-                        />
-                      </div>
-                      </>
                     )}
                     <p className="flex items-start gap-1.5 text-[12px] leading-snug text-neutral-500">
                       <Upload className="mt-px size-3.5 shrink-0" aria-hidden />
