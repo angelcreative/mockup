@@ -3,7 +3,8 @@ services:
     name: mockup
     runtime: node
     buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium && npm run build
-    startCommand: npm start
+    # Node directly, not through npm: one process instead of two leaves more of the 512 MB for Chromium.
+    startCommand: NODE_ENV=production node --max-old-space-size=256 dist/server.js
     envVars:
       - key: NODE_VERSION
         value: "22"

@@ -51,10 +51,17 @@ Returns a JPEG of the site at that viewport (only the device viewports the app u
 
 While a page loads, the device shows a page-shaped placeholder with a moving highlight; after 6 s and 15 s a short note says the site is slow. When the first screen arrives you can already scroll; the part below it is sketched until the full page replaces it in place. The device on screen is captured first, then mobile, tablet, and laptop sizes in the background (`priority=low`), so switching family is instant. Switching to another size of the same family shows the nearest capture straight away and fades to the exact one when it arrives, keeping the scroll position; a size from another family waits on the placeholder instead.
 
-One Chromium serves the whole process and takes one capture at a time; the device someone is looking at goes before background captures. Captures are shared between visitors and served fresh for ten minutes, then served stale for up to thirty while a new one is taken in the background (48 MB at most). The opening page, apple.com on iPhone 14, is captured when the server starts. **Open** on the page already on screen asks for a fresh capture (`fresh=1`). Errors say what went wrong: an address that doesn't exist, a site that blocks automated visits or answers with an error, a slow site, a bad certificate. Ads and analytics requests are blocked. The browser closes after two minutes without captures.
+One Chromium serves the whole process and takes one capture at a time; the device someone is looking at goes before background captures. Captures are shared between visitors and served fresh for ten minutes, then served stale for up to thirty while a new one is taken in the background (24 MB at most). **Open** on the page already on screen asks for a fresh capture (`fresh=1`). Errors say what went wrong: an address that doesn't exist, a site that blocks automated visits or answers with an error, a slow site, a bad certificate. Ads and analytics requests are blocked. The browser closes after two minutes without captures.
 
 Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes.
 
 ## Render
 
-`render.yaml` installs Chromium during the build and starts `npm start`, the Node server that serves the app and `/api/capture`. The Starter plan has 512 MB.
+`render.yaml` installs Chromium during the build, builds Next and compiles `server.ts` to `dist/server.js` (`npm run build`), and starts it with Node directly. On the Starter plan (512 MB), set the service's **Start Command** to the one in `render.yaml` if the service wasn't created from it: `npm start` keeps an extra npm process alive.
+
+Memory on 512 MB:
+
+- The server alone uses about 190 MB.
+- Chromium runs with one renderer for every frame, a capped JavaScript heap, and no video.
+- The full page is shot in 800 px bands, and Chromium drops decoded images between bands. A page with thirty 2400×1600 images peaked at about 350 MB for the whole app on a phone and 430 MB on a laptop.
+- A watchdog reads the container's memory every 150 ms. Past 88% of the limit it closes Chromium and answers "This page is too heavy to capture on this server" instead of letting the server be killed. `MEMORY_LIMIT_MB` sets the limit where the cgroup doesn't report one.

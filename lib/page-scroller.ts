@@ -17,7 +17,8 @@ const MAX_PAGE = 12_000;
  */
 export class PageScroller {
   readonly canvas: HTMLCanvasElement;
-  private bitmap: ImageBitmap | null = null;
+  /** The capture's bands, decoded, with where each starts in image pixels. */
+  private bands: { bitmap: ImageBitmap; start: number }[] = [];
   private capture: PageCapture | null = null;
   private viewport = { width: 1, height: 1 };
   /** Scroll position in CSS pixels of the device's viewport. */
@@ -65,14 +66,14 @@ export class PageScroller {
       this.resize(width, height);
       return true;
     }
-    let bitmap: ImageBitmap;
+    let bitmaps: ImageBitmap[];
     try {
-      bitmap = await createImageBitmap(capture.blob);
+      bitmaps = await Promise.all(capture.tiles.map((tile) => createImageBitmap(tile.blob)));
     } catch {
       return false;
     }
     if (token !== this.token) {
-      bitmap.close();
+      bitmaps.forEach((bitmap) => bitmap.close());
       return false;
     }
     const previous = this.capture;
@@ -80,9 +81,14 @@ export class PageScroller {
     const sameWidth = samePage && previous?.width === capture.width && this.viewport.width === width;
     const ratio = samePage && this.maxY > 0 ? this.y / this.maxY : 0;
     const keep = this.y;
-    const fadeFrom = previous && this.bitmap ? this.snapshot() : null;
-    this.bitmap?.close();
-    this.bitmap = bitmap;
+    const fadeFrom = previous && this.bands.length ? this.snapshot() : null;
+    this.releaseBands();
+    let start = 0;
+    this.bands = bitmaps.map((bitmap) => {
+      const band = { bitmap, start };
+      start += bitmap.height;
+      return band;
+    });
     this.capture = capture;
     this.viewport = { width, height };
     this.y = sameWidth ? Math.min(keep, this.maxY) : ratio * this.maxY;
@@ -105,8 +111,7 @@ export class PageScroller {
     window.clearTimeout(this.settle);
     this.endFade();
     this.stop();
-    this.bitmap?.close();
-    this.bitmap = null;
+    this.releaseBands();
     this.capture = null;
     this.y = 0;
     this.onFrame(null);
@@ -138,6 +143,11 @@ export class PageScroller {
     this.velocity = span > 0 ? distance / span : 0;
     if (Math.abs(this.velocity) < MIN_FLING) this.velocity = 0;
     this.animate();
+  }
+
+  private releaseBands() {
+    this.bands.forEach((band) => band.bitmap.close());
+    this.bands = [];
   }
 
   private stop() {
@@ -204,11 +214,11 @@ export class PageScroller {
   }
 
   private draw() {
-    const bitmap = this.bitmap;
     const capture = this.capture;
-    if (!bitmap || !capture) return;
-    const pixels = bitmap.width / capture.width;
-    const width = bitmap.width;
+    const first = this.bands[0]?.bitmap;
+    if (!first || !capture) return;
+    const pixels = first.width / capture.width;
+    const width = first.width;
     const height = Math.max(1, Math.round(this.viewport.height * this.scale * pixels));
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
@@ -217,10 +227,15 @@ export class PageScroller {
     const top = this.y * this.scale * pixels;
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, width, height);
-    // Only the part of the slice that lies on the image is copied; overscroll shows white.
-    const from = Math.max(0, top);
-    const to = Math.min(bitmap.height, top + height);
-    if (to > from) context.drawImage(bitmap, 0, from, width, to - from, 0, from - top, width, to - from);
+    // Only the parts of the bands inside the slice are copied; overscroll shows white.
+    let to = Math.max(0, top);
+    for (const { bitmap, start } of this.bands) {
+      const from = Math.max(top, start);
+      const end = Math.min(top + height, start + bitmap.height);
+      if (end <= from) continue;
+      context.drawImage(bitmap, 0, from - start, width, end - from, 0, from - top, width, end - from);
+      to = Math.max(to, end);
+    }
     // Below the first screen, until the full page arrives, the rest of the page is sketched.
     const coming = Math.min(this.extent * pixels, top + height);
     if (capture.partial && coming > Math.max(to, top)) {

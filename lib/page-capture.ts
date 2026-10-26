@@ -8,7 +8,8 @@ export type PageCapture = {
   pageHeight: number;
   /** Only the first screen; the full page is still on its way. */
   partial: boolean;
-  blob: Blob;
+  /** JPEG bands, top to bottom, with their CSS heights. */
+  tiles: { blob: Blob; height: number }[];
 };
 
 export class CaptureFailed extends Error {}
@@ -43,6 +44,7 @@ export async function fetchCapture(
   }
   const captured = Number(response.headers.get("X-Capture-Height")) || height;
   const pageHeight = Number(response.headers.get("X-Page-Height")) || height;
+  const body = await response.blob();
   return {
     url,
     width: Number(response.headers.get("X-Capture-Width")) || width,
@@ -51,8 +53,23 @@ export async function fetchCapture(
     pageHeight,
     // A request for the top can be answered with the whole page when that is cached.
     partial: options.part === "top" && captured <= height && pageHeight > captured,
-    blob: await response.blob(),
+    tiles: splitTiles(body, response.headers.get("X-Tiles"), captured),
   };
+}
+
+/** The server sends the page as JPEG bands back to back; `X-Tiles` lists "height:bytes" for each. */
+function splitTiles(body: Blob, header: string | null, height: number) {
+  const parts = (header ?? "")
+    .split(",")
+    .map((part) => part.split(":").map(Number))
+    .filter(([h, bytes]) => h > 0 && bytes > 0);
+  if (parts.length === 0) return [{ blob: body, height }];
+  let offset = 0;
+  return parts.map(([h, bytes]) => {
+    const blob = body.slice(offset, offset + bytes, "image/jpeg");
+    offset += bytes;
+    return { blob, height: h };
+  });
 }
 
 /** Asks the server to start a capture without waiting for it, e.g. while a URL is typed. */

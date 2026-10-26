@@ -3,7 +3,7 @@ import { parse } from "node:url";
 
 import next from "next";
 
-import { handleCapture, shutdownBrowser, warmBrowser, warmDefault } from "./lib/capture";
+import { handleCapture, shutdownBrowser, warmBrowser } from "./lib/capture";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -40,7 +40,6 @@ async function stop() {
 void app.prepare().then(() => {
   server.listen(port, hostname, () => {
     console.log(`Mockup listening on ${port}`);
-    warmDefault();
   });
 });
 
