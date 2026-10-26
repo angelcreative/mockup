@@ -1,6 +1,6 @@
 # Mockup
 
-Put a site on a 3D device. Chromium on the server captures one screen of the page at the device's exact viewport, at the spot of the page you choose, so any number of people can use the app at once on a small server.
+Open a site on a 3D device and scroll through it. Chromium on the server takes a full-page capture at the device's exact viewport, and the page scrolls inside the device in the browser, so any number of people can use the app at once.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). The URL field starts at `
 ## Use
 
 1. Paste a URL, or keep the default, and press **Open**.
-2. Choose the device. Drag anywhere to orbit. **Position on page** (under the URL) picks which screen of the page shows: **Top**, **Middle**, **Bottom**, or any point in 5% steps with the slider. The last screen stays on the glass, marked "Updating…", until the new one arrives.
+2. Choose the device. Drag off the screen to orbit. On the screen, the wheel or a drag scrolls the page, with momentum and a rubber-band edge like iOS.
 3. The **View** bar at the bottom moves the camera:
    - **Rotate** (`R`) drags to orbit. **Move** (`H`) drags to slide the device across the viewport; the device itself is grabbable and the page ignores the pointer. Hold `Space` to move for a moment, or right-drag, Shift-drag, or two-finger drag in either mode.
    - **−** / **+** (`-` / `+`) zoom; the percentage returns to the framed zoom. Arrow keys nudge the device, Shift for bigger steps.
@@ -40,15 +40,18 @@ Mac sizes, as of 10 Oct 2026, are the default Retina logical resolutions: MacBoo
 
 ## Page capture
 
-`GET /api/capture?url=…&w=…&h=…&at=0..1[&priority=low][&fresh=1][&warm=1]`
+`GET /api/capture?url=…&w=…&h=…[&part=top][&priority=low][&fresh=1][&warm=1]`
 
-Returns one screen of the site as a JPEG, at that viewport (only the device viewports the app uses are accepted) and at position `at` in the page: 0 is the top, 1 the last screen, in 5% steps. Headers give `X-Capture-Width`, `X-Capture-Height`, `X-Page-Height`, and `X-Scroll-Y` in CSS pixels. The server waits for the page to load (up to 5 s), jumps to the position (twice, for pages that grow), and gives lazy images and scroll-triggered content 0.7 s to settle, with reduced motion. Sticky headers show as they would in a browser at that spot.
+Returns a JPEG of the site at that viewport (only the device viewports the app uses are accepted), with `X-Capture-Width`, `X-Capture-Height`, and `X-Page-Height` in CSS pixels. Each capture is taken in two parts from one page load:
+
+- `part=top` is the first screen, shot about 1.5 s after the page's HTML has loaded, so something real is on the glass quickly.
+- The full page follows, after the page has loaded (up to 8 s), the server has scrolled through it so lazy images load, and reduced motion has shown scroll-triggered content. Pages are cut at 12,000 CSS pixels or 12 megapixels. Sticky headers appear once, at the top.
 
 `warm=1` only queues the capture and answers `202`; the studio uses it while an address is typed, so **Open** is usually instant. `GET /api/warm` starts Chromium ahead of the first capture; the studio calls it as it opens.
 
-While a page loads, the device shows a page-shaped placeholder with a moving highlight; after 6 s and 15 s a short note says the site is slow. The device on screen is captured first, then mobile, tablet, and laptop sizes at the same position in the background (`priority=low`), so switching family is instant. Switching size or position shows the closest capture straight away (the same spot first, then the nearest size of the same family) and fades to the exact one when it arrives. The position is part of the shareable link (`at`).
+While a page loads, the device shows a page-shaped placeholder with a moving highlight; after 6 s and 15 s a short note says the site is slow. When the first screen arrives you can already scroll; the part below it is sketched until the full page replaces it in place. The device on screen is captured first, then mobile, tablet, and laptop sizes in the background (`priority=low`), so switching family is instant. Switching to another size of the same family shows the nearest capture straight away and fades to the exact one when it arrives, keeping the scroll position; a size from another family waits on the placeholder instead.
 
-One Chromium serves the whole process and takes one capture at a time; the device someone is looking at goes before background captures. Captures are shared between visitors and served fresh for ten minutes, then served stale for up to thirty while a new one is taken in the background (24 MB at most). **Open** on the page already on screen asks for a fresh capture (`fresh=1`). Errors say what went wrong: an address that doesn't exist, a site that blocks automated visits or answers with an error, a slow site, a bad certificate. Ads, analytics, and video requests are blocked. The browser closes after two minutes without captures.
+One Chromium serves the whole process and takes one capture at a time; the device someone is looking at goes before background captures. Captures are shared between visitors and served fresh for ten minutes, then served stale for up to thirty while a new one is taken in the background (24 MB at most). **Open** on the page already on screen asks for a fresh capture (`fresh=1`). Errors say what went wrong: an address that doesn't exist, a site that blocks automated visits or answers with an error, a slow site, a bad certificate. Ads and analytics requests are blocked. The browser closes after two minutes without captures.
 
 Only `http` and `https` addresses are accepted. Private, loopback, and link-local hosts are blocked, including requests the page makes.
 
@@ -60,5 +63,5 @@ Memory on 512 MB:
 
 - The server alone uses about 190 MB.
 - Chromium runs with one renderer for every frame, a capped JavaScript heap, and no video.
-- Only the screen at the chosen position is loaded and shot, and Chromium drops decoded images before the shot. A page with thirty 2400×1600 images peaked at about 340–390 MB for the whole app, at any position, on a phone or a laptop.
+- The full page is shot in 800 px bands, and Chromium drops decoded images between bands. A page with thirty 2400×1600 images peaked at about 350 MB for the whole app on a phone and 430 MB on a laptop.
 - A watchdog reads the container's memory every 150 ms. Past 88% of the limit it closes Chromium and answers "This page is too heavy to capture on this server" instead of letting the server be killed. `MEMORY_LIMIT_MB` sets the limit where the cgroup doesn't report one.

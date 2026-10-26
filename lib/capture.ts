@@ -12,15 +12,20 @@ const BROWSER_IDLE_MS = 2 * 60 * 1000;
 const FRESH_MS = 10 * 60 * 1000;
 const STALE_MS = 30 * 60 * 1000;
 const CACHE_BYTES = 24 * 1024 * 1024;
-const JOB_MS = 30_000;
-/** How long a page may take to finish loading before its screen is shot anyway. */
-const LOAD_MS = 5_000;
-/** After scrolling to the asked position, time for lazy images and sticky headers to settle. */
-const SETTLE_MS = 700;
+const JOB_MS = 40_000;
+/** How long the first screen waits for the page's load event before it is shot anyway. */
+const TOP_LOAD_MS = 1_500;
+const FULL_LOAD_MS = 8_000;
+/** Longest page kept, and the pixel budget that keeps a capture decodable on a phone. */
+const MAX_CSS_HEIGHT = 12_000;
+const MAX_PIXELS = 12_000_000;
 const MAX_QUEUE = 24;
-const JPEG_QUALITY = 82;
-/** Positions are kept in 5% steps, so nearby slider values share a capture. */
-const POSITION_STEPS = 20;
+const JPEG_QUALITY = 80;
+/**
+ * The full page is shot in bands this tall rather than as one huge image, and Chromium is asked
+ * to drop decoded images between bands; that keeps a heavy page well inside 512 MB.
+ */
+const TILE_CSS = 800;
 /** Past this share of the container's memory a capture is abandoned before the server is killed. */
 const MEMORY_TRIP = 0.88;
 const MEMORY_LIMIT = Number(process.env.MEMORY_LIMIT_MB || 512) * 1024 * 1024;
@@ -50,27 +55,35 @@ const BLOCKED_TRACKERS = [
   "nr-data.net",
 ];
 
-/** One screen of the page, as a phone or laptop would show it at that scroll position. */
+/** `top` is the first screen, shot as soon as the page has painted; `full` is the whole page. */
+export type CapturePart = "top" | "full";
+
 export type Capture = {
+  /** One or more JPEG bands, top to bottom, back to back. */
   image: Buffer;
-  /** CSS size of the screen. */
+  /** CSS height and byte length of each band. */
+  tiles: { height: number; bytes: number }[];
+  /** CSS width of the page, and how much of its height the image covers. */
   width: number;
   height: number;
-  /** The page's full height and where the screen starts in it. */
+  /** The page's full height, which can be taller than the capture. */
   pageHeight: number;
-  scrollY: number;
+};
+
+type Deferred = {
+  promise: Promise<Capture>;
+  resolve: (capture: Capture) => void;
+  reject: (error: unknown) => void;
+  settled: boolean;
 };
 
 type Job = {
   key: string;
   url: string;
   profile: ViewportProfile;
-  /** 0 is the top of the page, 1 its last screen. */
-  position: number;
   urgent: boolean;
-  promise: Promise<Capture>;
-  resolve: (capture: Capture) => void;
-  reject: (error: unknown) => void;
+  top: Deferred;
+  full: Deferred;
 };
 
 let browser: Browser | null = null;
@@ -82,13 +95,25 @@ const pending = new Map<string, Job>();
 const cache = new Map<string, { capture: Capture; at: number }>();
 let cacheBytes = 0;
 
-export function snapPosition(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.round(Math.min(1, Math.max(0, value)) * POSITION_STEPS) / POSITION_STEPS;
+function deferred(): Deferred {
+  const entry = { settled: false } as Deferred;
+  entry.promise = new Promise<Capture>((resolve, reject) => {
+    entry.resolve = (capture) => {
+      entry.settled = true;
+      resolve(capture);
+    };
+    entry.reject = (error) => {
+      entry.settled = true;
+      reject(error);
+    };
+  });
+  // A part nobody asked for must not surface as an unhandled rejection.
+  entry.promise.catch(() => undefined);
+  return entry;
 }
 
-function captureKey(url: string, profile: ViewportProfile, position: number) {
-  return `${url}|${profile.width}x${profile.height}@${profile.dsf}|${position}`;
+function captureKey(url: string, profile: ViewportProfile) {
+  return `${url}|${profile.width}x${profile.height}@${profile.dsf}`;
 }
 
 function remember(key: string, capture: Capture) {
@@ -249,12 +274,37 @@ export function publicError(error: unknown) {
   return "Could not open this page.";
 }
 
-/**
- * Opens the page, moves to the asked position, lets that screen's lazy images and
- * scroll-triggered content load, and shoots it.
- */
-async function shoot(job: Job): Promise<Capture> {
-  const { url, profile, position } = job;
+/** Scrolls through the page so lazy images and scroll-triggered content load, then returns to the top. */
+async function wakePage(page: import("playwright").Page, step: number, relieve: () => Promise<unknown>) {
+  // Every second and a half, and at the end, let Chromium drop what it has decoded so far.
+  const relief = setInterval(() => void relieve(), 1500);
+  await page
+    .evaluate(
+      async ({ step, max }) => {
+        const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        const height = () => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0);
+        for (let y = 0; y < Math.min(height(), max); y += step) {
+          window.scrollTo(0, y);
+          await wait(110);
+        }
+        window.scrollTo(0, 0);
+      },
+      { step: Math.max(200, Math.round(step * 0.9)), max: MAX_CSS_HEIGHT },
+    )
+    .catch(() => undefined);
+  clearInterval(relief);
+  await relieve();
+}
+
+function pageHeightOf(page: import("playwright").Page) {
+  return page.evaluate(() =>
+    Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0, window.innerHeight),
+  );
+}
+
+/** Shoots the first screen as soon as the page paints, then the whole page once it has settled. */
+async function shoot(job: Job) {
+  const { url, profile } = job;
   const instance = await getBrowser();
   let context: BrowserContext | null = null;
   try {
@@ -283,6 +333,8 @@ async function shoot(job: Job): Promise<Capture> {
     });
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
+    // Lets Chromium drop decoded images and caches it can rebuild for the next band.
+    const relieve = () => cdp.send("Memory.simulatePressureNotification", { level: "critical" }).catch(() => undefined);
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
     await assertPublicUrl(page.url());
     const status = response?.status() ?? 200;
@@ -290,32 +342,47 @@ async function shoot(job: Job): Promise<Capture> {
       throw new CaptureError(502, `This site blocks automated visits (${status}).`);
     }
     if (status >= 400) throw new CaptureError(502, `The site answered with an error (${status}).`);
-    await page.waitForLoadState("load", { timeout: LOAD_MS }).catch(() => undefined);
 
-    // Jump to the spot rather than scroll through: only what is on that screen gets loaded and
-    // decoded, which keeps image-heavy pages small. A second jump catches pages that grew.
-    const place = () =>
-      page
-        .evaluate((position) => {
-          const height = Math.max(
-            document.documentElement.scrollHeight,
-            document.body?.scrollHeight ?? 0,
-            window.innerHeight,
-          );
-          window.scrollTo(0, Math.round(position * Math.max(0, height - window.innerHeight)));
-          return { scrollY: Math.round(window.scrollY), pageHeight: height };
-        }, position)
-        .catch(() => ({ scrollY: 0, pageHeight: profile.height }));
-    let placed = await place();
-    if (position > 0) {
-      await page.waitForTimeout(SETTLE_MS / 2);
-      placed = await place();
+    const started = Date.now();
+    await page.waitForLoadState("load", { timeout: TOP_LOAD_MS }).catch(() => undefined);
+    if (!job.top.settled) {
+      const top = await page.screenshot({ type: "jpeg", quality: JPEG_QUALITY, timeout: 10_000 });
+      const capture = {
+        image: top,
+        tiles: [{ height: profile.height, bytes: top.length }],
+        width: profile.width,
+        height: profile.height,
+        pageHeight: await pageHeightOf(page),
+      };
+      remember(`${job.key}|top`, capture);
+      job.top.resolve(capture);
     }
-    await page.waitForTimeout(position > 0 ? SETTLE_MS : 200);
-    // Lets Chromium drop decoded images it no longer shows before it paints the shot.
-    await cdp.send("Memory.simulatePressureNotification", { level: "critical" }).catch(() => undefined);
-    const image = await page.screenshot({ type: "jpeg", quality: JPEG_QUALITY, timeout: 10_000 });
-    return { image, width: profile.width, height: profile.height, ...placed };
+
+    const left = FULL_LOAD_MS - (Date.now() - started);
+    if (left > 0) await page.waitForLoadState("load", { timeout: left }).catch(() => undefined);
+    await wakePage(page, profile.height, relieve);
+    await page.waitForTimeout(400);
+    const pageHeight = await pageHeightOf(page);
+    const budget = Math.floor(MAX_PIXELS / (profile.width * profile.dsf * profile.dsf));
+    const height = Math.max(profile.height, Math.min(pageHeight, MAX_CSS_HEIGHT, budget));
+    const bands: Buffer[] = [];
+    const tiles: Capture["tiles"] = [];
+    for (let y = 0; y < height; y += TILE_CSS) {
+      const band = Math.min(TILE_CSS, height - y);
+      await relieve();
+      const image = await page.screenshot({
+        type: "jpeg",
+        quality: JPEG_QUALITY,
+        fullPage: true,
+        clip: { x: 0, y, width: profile.width, height: band },
+        timeout: 15_000,
+      });
+      bands.push(image);
+      tiles.push({ height: band, bytes: image.length });
+    }
+    const capture = { image: Buffer.concat(bands), tiles, width: profile.width, height, pageHeight };
+    remember(`${job.key}|full`, capture);
+    job.full.resolve(capture);
   } finally {
     await context?.close().catch(() => undefined);
   }
@@ -332,17 +399,16 @@ async function drain() {
       let timer: NodeJS.Timeout | null = null;
       const guard = memoryGuard();
       try {
-        const capture = await Promise.race([
+        await Promise.race([
           shoot(job),
           guard.tripped,
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error("Timeout")), JOB_MS);
           }),
         ]);
-        remember(job.key, capture);
-        job.resolve(capture);
       } catch (error) {
-        job.reject(error);
+        if (!job.top.settled) job.top.reject(error);
+        if (!job.full.settled) job.full.reject(error);
         // A hung or oversized page can leave the browser unusable or the server near its limit;
         // closing Chromium gives every byte back, and the next capture starts clean.
         const heavy = error instanceof CaptureError && error.message === HEAVY_PAGE;
@@ -363,43 +429,41 @@ async function drain() {
   }
 }
 
-function enqueue(url: string, profile: ViewportProfile, position: number, urgent: boolean) {
-  const key = captureKey(url, profile, position);
+function enqueue(url: string, profile: ViewportProfile, urgent: boolean) {
+  const key = captureKey(url, profile);
   const existing = pending.get(key);
   if (existing) {
     existing.urgent ||= urgent;
-    return existing.promise;
+    return existing;
   }
   if (queue.length >= MAX_QUEUE || (!urgent && queue.length >= MAX_QUEUE / 2)) {
     throw new CaptureError(503, "The server is busy. Try again in a moment.");
   }
-  let resolve!: (capture: Capture) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<Capture>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  // A background refresh nobody waits for must not surface as an unhandled rejection.
-  promise.catch(() => undefined);
-  pending.set(key, { key, url, profile, position, urgent, promise, resolve, reject });
-  queue.push(pending.get(key) as Job);
+  const job: Job = { key, url, profile, urgent, top: deferred(), full: deferred() };
+  pending.set(key, job);
+  queue.push(job);
   void drain();
-  return promise;
+  return job;
 }
 
-/** A cached capture is served at once; a stale one is also refreshed in the background. */
+/**
+ * Resolves with the part asked for. A cached full page also answers a request for the top,
+ * and a stale capture is served at once while a new one is taken in the background.
+ */
 export function requestCapture(
   url: string,
   profile: ViewportProfile,
-  options: { position: number; urgent: boolean; fresh: boolean },
+  options: { urgent: boolean; fresh: boolean; part: CapturePart },
 ) {
-  const position = snapPosition(options.position);
+  const key = captureKey(url, profile);
   if (!options.fresh) {
-    const hit = cached(captureKey(url, profile, position));
+    const full = cached(`${key}|full`);
+    const top = options.part === "top" ? cached(`${key}|top`) : null;
+    const hit = full ?? top;
     if (hit) {
       if (hit.stale) {
         try {
-          enqueue(url, profile, position, false);
+          enqueue(url, profile, false);
         } catch {
           // Busy: the stale capture will do.
         }
@@ -408,7 +472,8 @@ export function requestCapture(
     }
   }
   try {
-    return enqueue(url, profile, position, options.urgent);
+    const job = enqueue(url, profile, options.urgent);
+    return job[options.part].promise;
   } catch (error) {
     return Promise.reject(error);
   }
@@ -420,9 +485,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 }
 
 /**
- * GET /api/capture?url=&w=&h=[&at=0..1][&priority=low][&fresh=1][&warm=1] → one screen as a JPEG.
- * `at` is the position in the page (0 top, 1 last screen). `warm=1` only queues the capture and
- * answers 202 straight away.
+ * GET /api/capture?url=&w=&h=[&part=top][&priority=low][&fresh=1][&warm=1] → a JPEG.
+ * `warm=1` only queues the capture and answers 202 straight away.
  */
 export async function handleCapture(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "GET") {
@@ -442,7 +506,7 @@ export async function handleCapture(req: IncomingMessage, res: ServerResponse) {
     const options = {
       urgent: params.get("priority") !== "low",
       fresh: params.get("fresh") === "1",
-      position: Number(params.get("at") ?? 0),
+      part: (params.get("part") === "top" ? "top" : "full") as CapturePart,
     };
     if (params.get("warm") === "1") {
       requestCapture(target, profile, options).catch(() => undefined);
@@ -458,7 +522,7 @@ export async function handleCapture(req: IncomingMessage, res: ServerResponse) {
       "X-Capture-Width": String(capture.width),
       "X-Capture-Height": String(capture.height),
       "X-Page-Height": String(capture.pageHeight),
-      "X-Scroll-Y": String(capture.scrollY),
+      "X-Tiles": capture.tiles.map((tile) => `${tile.height}:${tile.bytes}`).join(","),
     });
     res.end(capture.image);
   } catch (error) {

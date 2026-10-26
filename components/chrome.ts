@@ -267,15 +267,17 @@ function drawLoader(
 
 /**
  * A page-shaped placeholder: a bar, a hero, headings, text and cards, swept by a soft
- * highlight. `phase` (radians) moves the sweep.
+ * highlight. `phase` (radians) moves the sweep; `continued` skips the bar and hero, for the
+ * part of a page below what has been captured so far.
  */
-function paintSkeleton(
+export function paintSkeleton(
   context: CanvasRenderingContext2D,
   x: number,
   y: number,
   width: number,
   height: number,
   phase: number,
+  continued = false,
 ) {
   if (width < 8 || height < 8) return;
   const unit = Math.max(0.5, Math.min(width / 390, height / 640));
@@ -293,11 +295,15 @@ function paintSkeleton(
   context.clip();
   context.fillStyle = "#e9e9e9";
   let cursor = y;
-  context.fillRect(x, y, width, 52 * unit);
-  cursor += 52 * unit + pad;
-  const hero = Math.min(height * 0.34, 300 * unit);
-  block(left, cursor, inner, hero, 14 * unit);
-  cursor += hero + pad * 1.4;
+  if (!continued) {
+    context.fillRect(x, y, width, 52 * unit);
+    cursor += 52 * unit + pad;
+    const hero = Math.min(height * 0.34, 300 * unit);
+    block(left, cursor, inner, hero, 14 * unit);
+    cursor += hero + pad * 1.4;
+  } else {
+    cursor += pad;
+  }
   // Text and cards repeat down the page.
   const widths = [0.62, 0.94, 0.86, 0.72];
   while (cursor < y + height) {
