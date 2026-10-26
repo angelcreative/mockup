@@ -1,37 +1,40 @@
-/** A capture as the client keeps it: the JPEG, decoded only while on screen. */
+/** One screen of a page as the client keeps it: the JPEG, decoded only while on screen. */
 export type PageCapture = {
   url: string;
-  /** CSS size of the viewport it was taken at, and how much of the page height it covers. */
+  /** CSS size of the screen it was taken at. */
   width: number;
-  viewportHeight: number;
   height: number;
+  /** Where in the page it was taken: 0 the top, 1 the last screen. */
+  position: number;
   pageHeight: number;
-  /** Only the first screen; the full page is still on its way. */
-  partial: boolean;
-  /** JPEG bands, top to bottom, with their CSS heights. */
-  tiles: { blob: Blob; height: number }[];
+  blob: Blob;
 };
 
 export class CaptureFailed extends Error {}
 
-export function captureKey(url: string, width: number, height: number) {
-  return `${url}|${width}x${height}`;
+/** Positions come in 5% steps, matching the server's cache. */
+export function snapPosition(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(Math.min(1, Math.max(0, value)) * 20) / 20;
 }
 
-function captureParams(url: string, width: number, height: number) {
-  return new URLSearchParams({ url, w: String(width), h: String(height) });
+export function captureKey(url: string, width: number, height: number, position: number) {
+  return `${url}|${width}x${height}|${snapPosition(position)}`;
+}
+
+function captureParams(url: string, width: number, height: number, position: number) {
+  return new URLSearchParams({ url, w: String(width), h: String(height), at: String(snapPosition(position)) });
 }
 
 export async function fetchCapture(
   url: string,
   width: number,
   height: number,
-  options: { urgent: boolean; fresh?: boolean; part?: "top" | "full" },
+  options: { position: number; urgent: boolean; fresh?: boolean },
 ): Promise<PageCapture> {
-  const params = captureParams(url, width, height);
+  const params = captureParams(url, width, height, options.position);
   if (!options.urgent) params.set("priority", "low");
   if (options.fresh) params.set("fresh", "1");
-  if (options.part === "top") params.set("part", "top");
   let response: Response;
   try {
     response = await fetch(`/api/capture?${params}`);
@@ -42,39 +45,19 @@ export async function fetchCapture(
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new CaptureFailed(body?.error ?? "Could not open this page.");
   }
-  const captured = Number(response.headers.get("X-Capture-Height")) || height;
-  const pageHeight = Number(response.headers.get("X-Page-Height")) || height;
-  const body = await response.blob();
   return {
     url,
     width: Number(response.headers.get("X-Capture-Width")) || width,
-    viewportHeight: height,
-    height: captured,
-    pageHeight,
-    // A request for the top can be answered with the whole page when that is cached.
-    partial: options.part === "top" && captured <= height && pageHeight > captured,
-    tiles: splitTiles(body, response.headers.get("X-Tiles"), captured),
+    height: Number(response.headers.get("X-Capture-Height")) || height,
+    position: snapPosition(options.position),
+    pageHeight: Number(response.headers.get("X-Page-Height")) || height,
+    blob: await response.blob(),
   };
 }
 
-/** The server sends the page as JPEG bands back to back; `X-Tiles` lists "height:bytes" for each. */
-function splitTiles(body: Blob, header: string | null, height: number) {
-  const parts = (header ?? "")
-    .split(",")
-    .map((part) => part.split(":").map(Number))
-    .filter(([h, bytes]) => h > 0 && bytes > 0);
-  if (parts.length === 0) return [{ blob: body, height }];
-  let offset = 0;
-  return parts.map(([h, bytes]) => {
-    const blob = body.slice(offset, offset + bytes, "image/jpeg");
-    offset += bytes;
-    return { blob, height: h };
-  });
-}
-
 /** Asks the server to start a capture without waiting for it, e.g. while a URL is typed. */
-export function warmCapture(url: string, width: number, height: number) {
-  const params = captureParams(url, width, height);
+export function warmCapture(url: string, width: number, height: number, position: number) {
+  const params = captureParams(url, width, height, position);
   params.set("warm", "1");
   void fetch(`/api/capture?${params}`).catch(() => undefined);
 }

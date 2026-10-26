@@ -175,9 +175,11 @@ function useDeviceTexture(
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const frame = frameRef.current;
     const showing = Boolean(frame && frame.width >= 1 && frame.height >= 1);
-    if (!sourceKeyRef.current) {
-      sourceKeyRef.current = sourceKey;
-    } else if (sourceKeyRef.current !== sourceKey) {
+    // A page captured before the scene mounted is already here on the first pass, so the first
+    // pass falls through to the fade-in like any later frame.
+    const first = !sourceKeyRef.current;
+    if (first) sourceKeyRef.current = sourceKey;
+    if (!first && sourceKeyRef.current !== sourceKey) {
       sourceKeyRef.current = sourceKey;
       const waiting = sourceKey === "loading" || (sourceKey === "live" && !showing);
       if (waiting) {
@@ -1765,6 +1767,7 @@ function Stage({
   designHold,
   designPending,
   tool,
+  glassActive,
   viewRef,
   recordFormat,
   recorderRef,
@@ -1790,6 +1793,8 @@ function Stage({
   designHold: boolean;
   designPending: boolean;
   tool: ViewTool;
+  /** The glass takes pointer input only while it offers something, e.g. a retry. */
+  glassActive: boolean;
   viewRef: MutableRefObject<ViewApi | null>;
   recordFormat: RecordFormat | null;
   recorderRef: MutableRefObject<Recorder | null>;
@@ -1874,7 +1879,7 @@ function Stage({
         viewportWidth={viewport.width}
         viewportHeight={viewport.height}
         orientation={turned ? "landscape" : "portrait"}
-        interactive={tool === "orbit"}
+        interactive={tool === "orbit" && glassActive}
         onInput={onInput}
       />
     </>
@@ -1903,6 +1908,7 @@ export default function Scene({
   designHold,
   designPending,
   tool,
+  glassActive,
   viewRef,
   recordFormat,
   recorderRef,
@@ -1928,6 +1934,8 @@ export default function Scene({
   designHold: boolean;
   designPending: boolean;
   tool: ViewTool;
+  /** The glass takes pointer input only while it offers something, e.g. a retry. */
+  glassActive: boolean;
   viewRef: MutableRefObject<ViewApi | null>;
   recordFormat: RecordFormat | null;
   recorderRef: MutableRefObject<Recorder | null>;
@@ -1972,6 +1980,7 @@ export default function Scene({
           designHold={designHold}
           designPending={designPending}
           tool={tool}
+          glassActive={glassActive}
           viewRef={viewRef}
           recordFormat={recordFormat}
           recorderRef={recorderRef}
