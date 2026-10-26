@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { chromium, type Browser, type BrowserContext } from "playwright";
 
-import { deviceById, liveViewport, profileForViewport, type ViewportProfile } from "./devices";
+import { profileForViewport, type ViewportProfile } from "./devices";
 import { CaptureError, assertPublicUrl } from "./ssrf";
 
 /** The browser closes after this long with nothing to capture, giving its memory back. */
@@ -10,7 +11,7 @@ const BROWSER_IDLE_MS = 2 * 60 * 1000;
 /** Captures are served fresh for ten minutes, then served stale while a new one is taken. */
 const FRESH_MS = 10 * 60 * 1000;
 const STALE_MS = 30 * 60 * 1000;
-const CACHE_BYTES = 48 * 1024 * 1024;
+const CACHE_BYTES = 24 * 1024 * 1024;
 const JOB_MS = 40_000;
 /** How long the first screen waits for the page's load event before it is shot anyway. */
 const TOP_LOAD_MS = 1_500;
@@ -20,10 +21,15 @@ const MAX_CSS_HEIGHT = 12_000;
 const MAX_PIXELS = 12_000_000;
 const MAX_QUEUE = 24;
 const JPEG_QUALITY = 80;
-
-/** The page the studio opens with, captured at boot so the first visit is instant. */
-const DEFAULT_URL = "https://www.apple.com/";
-const DEFAULT_DEVICE = "iphone-14";
+/**
+ * The full page is shot in bands this tall rather than as one huge image, and Chromium is asked
+ * to drop decoded images between bands; that keeps a heavy page well inside 512 MB.
+ */
+const TILE_CSS = 800;
+/** Past this share of the container's memory a capture is abandoned before the server is killed. */
+const MEMORY_TRIP = 0.88;
+const MEMORY_LIMIT = Number(process.env.MEMORY_LIMIT_MB || 512) * 1024 * 1024;
+const HEAVY_PAGE = "This page is too heavy to capture on this server. Try a lighter page or a smaller device.";
 
 /** Ads and analytics only cost time and memory in a capture. */
 const BLOCKED_TRACKERS = [
@@ -53,7 +59,10 @@ const BLOCKED_TRACKERS = [
 export type CapturePart = "top" | "full";
 
 export type Capture = {
+  /** One or more JPEG bands, top to bottom, back to back. */
   image: Buffer;
+  /** CSS height and byte length of each band. */
+  tiles: { height: number; bytes: number }[];
   /** CSS width of the page, and how much of its height the image covers. */
   width: number;
   height: number;
@@ -167,7 +176,10 @@ async function getBrowser() {
         "--disable-default-apps",
         "--disable-sync",
         "--mute-audio",
-        "--disable-features=Translate,MediaRouter,OptimizationHints,BackForwardCache",
+        // One renderer for every frame instead of one per site, and a capped JavaScript heap.
+        "--disable-site-isolation-trials",
+        "--disable-features=IsolateOrigins,site-per-process,Translate,MediaRouter,OptimizationHints,BackForwardCache",
+        "--js-flags=--max-old-space-size=192",
       ],
     })
     .then((instance) => {
@@ -202,6 +214,52 @@ export function warmBrowser() {
     .catch(() => undefined);
 }
 
+function readNumber(path: string) {
+  try {
+    return Number(readFileSync(path, "utf8").trim());
+  } catch {
+    return NaN;
+  }
+}
+
+function statValue(path: string, keys: string[]) {
+  try {
+    const stat = readFileSync(path, "utf8");
+    return keys.reduce((sum, key) => sum + Number(stat.match(new RegExp(`^${key} (\\d+)$`, "m"))?.[1] ?? 0), 0);
+  } catch {
+    return NaN;
+  }
+}
+
+/**
+ * Memory the container is really using (process memory, not the reclaimable file cache) and its
+ * limit, from cgroup v2 or v1. Null where neither is readable, e.g. on a laptop.
+ */
+function containerMemory() {
+  let used = statValue("/sys/fs/cgroup/memory.stat", ["anon", "shmem"]);
+  let limit = readNumber("/sys/fs/cgroup/memory.max");
+  if (!Number.isFinite(used) || used <= 0) {
+    used = statValue("/sys/fs/cgroup/memory/memory.stat", ["total_rss", "total_shmem"]);
+    limit = readNumber("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+  }
+  if (!Number.isFinite(used) || used <= 0) return null;
+  if (!Number.isFinite(limit) || limit <= 0 || limit > 64 * 1024 ** 3) limit = MEMORY_LIMIT;
+  return { used, limit };
+}
+
+/** Rejects as soon as memory nears the limit, so the job is dropped instead of the server. */
+function memoryGuard() {
+  let timer: NodeJS.Timeout | null = null;
+  const tripped = new Promise<never>((_, reject) => {
+    timer = setInterval(() => {
+      const memory = containerMemory();
+      if (memory && memory.used > memory.limit * MEMORY_TRIP) reject(new CaptureError(503, HEAVY_PAGE));
+    }, 150);
+  });
+  tripped.catch(() => undefined);
+  return { tripped, stop: () => timer && clearInterval(timer) };
+}
+
 export function publicError(error: unknown) {
   if (error instanceof CaptureError) return error.message;
   const message = error instanceof Error ? error.message : "";
@@ -217,7 +275,9 @@ export function publicError(error: unknown) {
 }
 
 /** Scrolls through the page so lazy images and scroll-triggered content load, then returns to the top. */
-async function wakePage(page: import("playwright").Page, step: number) {
+async function wakePage(page: import("playwright").Page, step: number, relieve: () => Promise<unknown>) {
+  // Every second and a half, and at the end, let Chromium drop what it has decoded so far.
+  const relief = setInterval(() => void relieve(), 1500);
   await page
     .evaluate(
       async ({ step, max }) => {
@@ -232,6 +292,8 @@ async function wakePage(page: import("playwright").Page, step: number) {
       { step: Math.max(200, Math.round(step * 0.9)), max: MAX_CSS_HEIGHT },
     )
     .catch(() => undefined);
+  clearInterval(relief);
+  await relieve();
 }
 
 function pageHeightOf(page: import("playwright").Page) {
@@ -260,7 +322,8 @@ async function shoot(job: Job) {
     await context.route("**/*", async (route) => {
       const requestUrl = route.request().url();
       if (isBenign(requestUrl)) return route.continue();
-      if (isTracker(requestUrl)) return route.abort();
+      // Video only costs memory in a still image; its poster frame still shows.
+      if (isTracker(requestUrl) || route.request().resourceType() === "media") return route.abort();
       try {
         await assertPublicUrl(requestUrl);
         await route.continue();
@@ -269,6 +332,9 @@ async function shoot(job: Job) {
       }
     });
     const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    // Lets Chromium drop decoded images and caches it can rebuild for the next band.
+    const relieve = () => cdp.send("Memory.simulatePressureNotification", { level: "critical" }).catch(() => undefined);
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
     await assertPublicUrl(page.url());
     const status = response?.status() ?? 200;
@@ -281,26 +347,40 @@ async function shoot(job: Job) {
     await page.waitForLoadState("load", { timeout: TOP_LOAD_MS }).catch(() => undefined);
     if (!job.top.settled) {
       const top = await page.screenshot({ type: "jpeg", quality: JPEG_QUALITY, timeout: 10_000 });
-      const capture = { image: top, width: profile.width, height: profile.height, pageHeight: await pageHeightOf(page) };
+      const capture = {
+        image: top,
+        tiles: [{ height: profile.height, bytes: top.length }],
+        width: profile.width,
+        height: profile.height,
+        pageHeight: await pageHeightOf(page),
+      };
       remember(`${job.key}|top`, capture);
       job.top.resolve(capture);
     }
 
     const left = FULL_LOAD_MS - (Date.now() - started);
     if (left > 0) await page.waitForLoadState("load", { timeout: left }).catch(() => undefined);
-    await wakePage(page, profile.height);
+    await wakePage(page, profile.height, relieve);
     await page.waitForTimeout(400);
     const pageHeight = await pageHeightOf(page);
     const budget = Math.floor(MAX_PIXELS / (profile.width * profile.dsf * profile.dsf));
     const height = Math.max(profile.height, Math.min(pageHeight, MAX_CSS_HEIGHT, budget));
-    const image = await page.screenshot({
-      type: "jpeg",
-      quality: JPEG_QUALITY,
-      fullPage: true,
-      clip: { x: 0, y: 0, width: profile.width, height },
-      timeout: 15_000,
-    });
-    const capture = { image, width: profile.width, height, pageHeight };
+    const bands: Buffer[] = [];
+    const tiles: Capture["tiles"] = [];
+    for (let y = 0; y < height; y += TILE_CSS) {
+      const band = Math.min(TILE_CSS, height - y);
+      await relieve();
+      const image = await page.screenshot({
+        type: "jpeg",
+        quality: JPEG_QUALITY,
+        fullPage: true,
+        clip: { x: 0, y, width: profile.width, height: band },
+        timeout: 15_000,
+      });
+      bands.push(image);
+      tiles.push({ height: band, bytes: image.length });
+    }
+    const capture = { image: Buffer.concat(bands), tiles, width: profile.width, height, pageHeight };
     remember(`${job.key}|full`, capture);
     job.full.resolve(capture);
   } finally {
@@ -317,9 +397,11 @@ async function drain() {
       const index = Math.max(0, queue.findIndex((job) => job.urgent));
       const job = queue.splice(index, 1)[0];
       let timer: NodeJS.Timeout | null = null;
+      const guard = memoryGuard();
       try {
         await Promise.race([
           shoot(job),
+          guard.tripped,
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error("Timeout")), JOB_MS);
           }),
@@ -327,13 +409,16 @@ async function drain() {
       } catch (error) {
         if (!job.top.settled) job.top.reject(error);
         if (!job.full.settled) job.full.reject(error);
-        // A hung page can leave the browser unusable; start clean next time.
-        if (error instanceof Error && error.message === "Timeout") {
+        // A hung or oversized page can leave the browser unusable or the server near its limit;
+        // closing Chromium gives every byte back, and the next capture starts clean.
+        const heavy = error instanceof CaptureError && error.message === HEAVY_PAGE;
+        if (heavy || (error instanceof Error && error.message === "Timeout")) {
           const current = browser;
           browser = null;
           await current?.close().catch(() => undefined);
         }
       } finally {
+        guard.stop();
         if (timer) clearTimeout(timer);
         pending.delete(job.key);
       }
@@ -394,14 +479,6 @@ export function requestCapture(
   }
 }
 
-/** Captures the studio's opening page at boot, so the first visitor doesn't wait for it. */
-export function warmDefault() {
-  const size = liveViewport(deviceById(DEFAULT_DEVICE), 0, "portrait");
-  const profile = profileForViewport(size.width, size.height);
-  if (!profile) return;
-  void requestCapture(DEFAULT_URL, profile, { urgent: false, fresh: false, part: "full" }).catch(() => undefined);
-}
-
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify(body));
@@ -445,6 +522,7 @@ export async function handleCapture(req: IncomingMessage, res: ServerResponse) {
       "X-Capture-Width": String(capture.width),
       "X-Capture-Height": String(capture.height),
       "X-Page-Height": String(capture.pageHeight),
+      "X-Tiles": capture.tiles.map((tile) => `${tile.height}:${tile.bytes}`).join(","),
     });
     res.end(capture.image);
   } catch (error) {
